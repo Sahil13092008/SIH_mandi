@@ -1,11 +1,31 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-const SUPABASE_URL = 'https://hfrzvhftrtvgcryyxmxx.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzIsInJlZiI6Imhmcnp2aGZ0cnR2Z2NyeXl4bXh4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc4MDU4MjksImV4cCI6MjEwMzM4MTgyOX0.Egj_utV5g72kxQCAbwPkW_5QbIjAVD8nxU86bZ5V3jg';
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || '';
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
-export const supabaseClient: SupabaseClient | null = (SUPABASE_URL && SUPABASE_ANON_KEY)
-  ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
-  : null;
+export const isSupabaseConfigured = (): boolean => {
+  return Boolean(
+    SUPABASE_URL && 
+    SUPABASE_ANON_KEY && 
+    !SUPABASE_URL.includes('YOUR_') && 
+    !SUPABASE_ANON_KEY.includes('YOUR_')
+  );
+};
+
+let supabaseInstance: SupabaseClient | null = null;
+
+if (SUPABASE_URL && SUPABASE_ANON_KEY && !SUPABASE_ANON_KEY.includes('YOUR_')) {
+  try {
+    supabaseInstance = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    console.log(`[Supabase] Client initialized with URL: ${SUPABASE_URL}`);
+  } catch (err) {
+    console.warn('[Supabase] Failed to initialize client, falling back to in-memory mode:', err);
+  }
+} else {
+  console.log('[Supabase] Credentials not provided or default placeholder used. App operating in in-memory mode with fallback capability.');
+}
+
+export const supabase = supabaseInstance;
 
 /**
  * Helper to sync token upserts to Supabase table `tokens` asynchronously
