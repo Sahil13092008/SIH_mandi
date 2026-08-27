@@ -78,6 +78,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     created_at: new Date().toISOString()
   });
 
+  const [allTokens, setAllTokens] = useState<Token[]>(FALLBACK_TOKENS);
   const [activeToken, setActiveToken] = useState<Token | null>(
     FALLBACK_TOKENS.find(t => t.token_id === 't-104') || FALLBACK_TOKENS[0]
   );
@@ -125,10 +126,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (err) {
       console.warn('Error fetching queue from API, using client fallback:', err);
     }
-    const filtered = FALLBACK_TOKENS.filter(t => t.center_id === selectedCenterId);
-    setCenterQueue(filtered);
+    setCenterQueue(allTokens.filter(t => t.center_id === selectedCenterId));
     setLastUpdated(new Date());
-  }, [selectedCenterId]);
+  }, [selectedCenterId, allTokens]);
 
   // Fetch Farmer Tokens
   const refreshFarmerTokens = useCallback(async (phone?: string) => {
@@ -148,12 +148,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (err) {
       console.warn('Error fetching farmer tokens from API, using client fallback:', err);
     }
-    const filtered = FALLBACK_TOKENS.filter(t => t.farmer_phone === targetPhone);
+    const filtered = allTokens.filter(t => t.farmer_phone === targetPhone);
     setFarmerTokens(filtered);
-    if (filtered.length > 0) {
+    if (filtered.length > 0 && !activeToken) {
       setActiveToken(filtered[0]);
     }
-  }, [currentFarmer?.phone, activeToken?.token_id]);
+  }, [currentFarmer?.phone, activeToken, allTokens]);
 
   // Fetch SMS Logs
   const refreshSmsLogs = useCallback(async () => {
@@ -302,6 +302,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       updated_at: nowIso
     };
 
+    setAllTokens(prev => [newToken, ...prev]);
     setActiveToken(newToken);
     setCenterQueue(prev => [newToken, ...prev]);
     setFarmerTokens(prev => [newToken, ...prev]);
@@ -331,7 +332,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const nowIso = new Date().toISOString();
-    let targetToken = centerQueue.find(t => t.token_id === tokenId) || activeToken;
+    let targetToken = allTokens.find(t => t.token_id === tokenId) || centerQueue.find(t => t.token_id === tokenId) || activeToken;
     if (!targetToken) {
       targetToken = farmerTokens.find(t => t.token_id === tokenId) || FALLBACK_TOKENS[0];
     }
@@ -347,6 +348,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       updated_at: nowIso
     };
 
+    setAllTokens(prev => prev.map(t => t.token_id === tokenId ? updatedToken : t));
     setCenterQueue(prev => prev.map(t => t.token_id === tokenId ? updatedToken : t));
     setFarmerTokens(prev => prev.map(t => t.token_id === tokenId ? updatedToken : t));
     if (activeToken?.token_id === tokenId) setActiveToken(updatedToken);
@@ -376,7 +378,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const nowIso = new Date().toISOString();
-    let targetToken = centerQueue.find(t => t.token_id === tokenId) || activeToken;
+    let targetToken = allTokens.find(t => t.token_id === tokenId) || centerQueue.find(t => t.token_id === tokenId) || activeToken;
     if (targetToken) {
       const updatedToken: Token = {
         ...targetToken,
@@ -386,6 +388,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         payment_method: 'DBT Direct Bank Transfer / UPI',
         updated_at: nowIso
       };
+      setAllTokens(prev => prev.map(t => t.token_id === tokenId ? updatedToken : t));
       setCenterQueue(prev => prev.map(t => t.token_id === tokenId ? updatedToken : t));
       setFarmerTokens(prev => prev.map(t => t.token_id === tokenId ? updatedToken : t));
       if (activeToken?.token_id === tokenId) setActiveToken(updatedToken);
@@ -399,6 +402,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (err) {
       // ignore
     }
+    setAllTokens(FALLBACK_TOKENS);
     await fetchCenters();
     await refreshCenterQueue();
     await refreshSmsLogs();
