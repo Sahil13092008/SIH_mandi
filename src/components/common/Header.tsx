@@ -80,7 +80,7 @@ export const Header: React.FC = () => {
             {/* Live Sync Status */}
             <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-stone-100 text-stone-700 text-xs font-medium border border-stone-200">
               <Radio className={`w-3.5 h-3.5 ${isConnected ? 'text-emerald-600 animate-pulse' : 'text-stone-400'}`} />
-              <span className="hidden sm:inline">{isConnected ? t.liveSync : 'Connecting...'}</span>
+              <span className="text-[11px] sm:text-xs font-semibold">{isConnected ? (t.liveSync || 'Live Sync Active') : 'Connecting...'}</span>
             </div>
 
             {/* Language Switcher */}

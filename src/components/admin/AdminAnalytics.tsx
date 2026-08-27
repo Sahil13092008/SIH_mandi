@@ -37,7 +37,7 @@ export const AdminAnalytics: React.FC = () => {
     }
     setOverview(getFallbackOverview());
     setLoading(false);
-};
+  };
 
   useEffect(() => {
     fetchOverview();
