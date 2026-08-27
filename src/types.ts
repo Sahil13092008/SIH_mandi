@@ -4,6 +4,7 @@ export type TokenStatus =
   | 'Quality Check'
   | 'Procured'
   | 'Payment Sent'
+  | 'Rejected'
   | 'Cancelled';
 
 export type CropType = 
@@ -19,6 +20,7 @@ export interface QualityCheckResult {
   grade: 'Grade A (FAQ)' | 'Grade B' | 'Grade C' | 'Rejected';
   moisture: number; // percentage e.g. 11.5%
   impurities: number; // percentage e.g. 1.2%
+  offered_rate?: number; // offered price per quintal in INR based on quality
   notes?: string;
   inspector_name: string;
   inspected_at: string;

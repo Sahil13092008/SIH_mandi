@@ -96,7 +96,16 @@ export const CenterDashboard: React.FC = () => {
 
   const handleQCSubmit = async (qcResult: QualityCheckResult) => {
     if (!selectedTokenForQC) return;
-    await advanceTokenStatus(selectedTokenForQC.token_id, 'Quality Check', qcResult, `QC Passed: ${qcResult.grade}`);
+    const isRejected = qcResult.grade === 'Rejected';
+    const nextStatus = isRejected ? 'Rejected' : 'Quality Check';
+    await advanceTokenStatus(
+      selectedTokenForQC.token_id, 
+      nextStatus, 
+      qcResult, 
+      isRejected 
+        ? `QC Rejected: Non-compliant quality (${qcResult.grade}). Lot Disqualified.` 
+        : `QC Certified (${qcResult.grade}). Rate: ₹${qcResult.offered_rate || selectedTokenForQC.msp_rate}/Qtl.`
+    );
     setSelectedTokenForQC(null);
   };
 
@@ -307,7 +316,9 @@ export const CenterDashboard: React.FC = () => {
                       </span>
                       <span
                         className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
-                          token.status === 'Payment Sent'
+                          token.status === 'Rejected' || token.quality_check_result?.grade === 'Rejected'
+                            ? 'bg-red-100 text-red-800 border border-red-300'
+                            : token.status === 'Payment Sent'
                             ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
                             : token.status === 'Procured'
                             ? 'bg-blue-100 text-blue-800 border border-blue-300'
@@ -318,9 +329,9 @@ export const CenterDashboard: React.FC = () => {
                             : 'bg-stone-100 text-stone-700 border border-stone-300'
                         }`}
                       >
-                        {token.status}
+                        {token.status === 'Rejected' || token.quality_check_result?.grade === 'Rejected' ? 'Rejected' : token.status}
                       </span>
-                      {token.queue_position > 0 && (
+                      {token.queue_position > 0 && token.status !== 'Rejected' && (
                         <span className="text-xs font-mono font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
                           Queue Pos #{token.queue_position}
                         </span>
@@ -349,22 +360,38 @@ export const CenterDashboard: React.FC = () => {
 
                     {/* QC details preview if available */}
                     {token.quality_check_result && (
-                      <div className="p-2 bg-stone-50 rounded-lg border border-stone-200 text-xs flex flex-wrap items-center gap-3">
-                        <span className="font-bold text-emerald-800">
+                      <div className={`p-2 rounded-lg border text-xs flex flex-wrap items-center gap-3 ${
+                        token.quality_check_result.grade === 'Rejected' 
+                          ? 'bg-red-50 border-red-200 text-red-900' 
+                          : 'bg-stone-50 border-stone-200 text-stone-800'
+                      }`}>
+                        <span className={`font-bold ${token.quality_check_result.grade === 'Rejected' ? 'text-red-800' : 'text-emerald-800'}`}>
                           Grade: {token.quality_check_result.grade}
                         </span>
-                        <span className="text-stone-600 font-mono">
+                        <span className="font-mono">
                           Moisture: {token.quality_check_result.moisture}%
                         </span>
-                        <span className="text-stone-600 font-mono">
+                        <span className="font-mono">
                           Foreign Matter: {token.quality_check_result.impurities}%
                         </span>
+                        {token.quality_check_result.offered_rate !== undefined && (
+                          <span className="font-mono font-bold text-blue-900">
+                            Rate: ₹{token.quality_check_result.offered_rate}/Qtl
+                          </span>
+                        )}
                       </div>
                     )}
                   </div>
 
                   {/* Right Column: Dynamic Action Buttons */}
                   <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-stone-100">
+                    {(token.status === 'Rejected' || token.quality_check_result?.grade === 'Rejected') && (
+                      <div className="flex items-center gap-1.5 text-xs font-bold text-red-800 bg-red-50 px-3.5 py-2 rounded-xl border border-red-200">
+                        <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                        <span>Lot Disqualified (No Payment)</span>
+                      </div>
+                    )}
+
                     {token.status === 'Registered' && (
                       <button
                         id={`advance-queue-${token.token_number}`}
@@ -389,7 +416,7 @@ export const CenterDashboard: React.FC = () => {
                       </button>
                     )}
 
-                    {token.status === 'Quality Check' && (
+                    {token.status === 'Quality Check' && token.quality_check_result?.grade !== 'Rejected' && (
                       <button
                         id={`advance-procure-${token.token_number}`}
                         onClick={() => handleAdvance(token)}
@@ -401,7 +428,7 @@ export const CenterDashboard: React.FC = () => {
                       </button>
                     )}
 
-                    {token.status === 'Procured' && (
+                    {token.status === 'Procured' && token.quality_check_result?.grade !== 'Rejected' && (
                       <button
                         id={`advance-pay-${token.token_number}`}
                         onClick={() => handleAdvance(token)}
@@ -413,7 +440,7 @@ export const CenterDashboard: React.FC = () => {
                       </button>
                     )}
 
-                    {token.status === 'Payment Sent' && (
+                    {token.status === 'Payment Sent' && token.quality_check_result?.grade !== 'Rejected' && (
                       <div className="flex items-center gap-1 text-xs font-bold text-emerald-800 bg-emerald-50 px-3 py-2 rounded-xl border border-emerald-200">
                         <CheckCircle2 className="w-4 h-4 text-emerald-600" />
                         <span>Payment Completed</span>

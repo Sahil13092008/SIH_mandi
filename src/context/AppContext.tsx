@@ -353,13 +353,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       targetToken = farmerTokens.find(t => t.token_id === tokenId) || FALLBACK_TOKENS[0];
     }
 
+    const isRejected = nextStatus === 'Rejected' || qcResult?.grade === 'Rejected';
+    const finalStatus: Token['status'] = isRejected ? 'Rejected' : nextStatus;
+    const rate = isRejected 
+      ? 0 
+      : (qcResult?.offered_rate !== undefined ? qcResult.offered_rate : targetToken.msp_rate);
+    const newPaymentAmount = isRejected ? 0 : targetToken.quantity * rate;
+
     const updatedToken: Token = {
       ...targetToken,
-      status: nextStatus,
+      status: finalStatus,
+      msp_rate: rate,
+      payment_amount: newPaymentAmount,
       quality_check_result: qcResult || targetToken.quality_check_result,
       status_history: [
         ...(targetToken.status_history || []),
-        { status: nextStatus, timestamp: nowIso, note: note || `Status updated to ${nextStatus}` }
+        { status: finalStatus, timestamp: nowIso, note: note || `Status updated to ${finalStatus}` }
       ],
       updated_at: nowIso
     };
@@ -370,20 +379,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (activeToken?.token_id === tokenId) setActiveToken(updatedToken);
 
     let eventName: SMSLog['trigger_event'] = 'QUEUE_ADVANCED';
-    let msgEn = `[e-MANDI ALERT] Token ${updatedToken.token_number} status updated to ${nextStatus}.`;
-    let msgHi = `[ई-मंडी सूचना] टोकन ${updatedToken.token_number} का स्टेटस ${nextStatus} हो गया है।`;
+    let msgEn = `[e-MANDI ALERT] Token ${updatedToken.token_number} status updated to ${finalStatus}.`;
+    let msgHi = `[ई-मंडी सूचना] टोकन ${updatedToken.token_number} का स्टेटस ${finalStatus} हो गया है।`;
 
-    if (nextStatus === 'In Queue') {
+    if (isRejected) {
+      eventName = 'QUALITY_CHECK_DONE';
+      msgEn = `[e-MANDI REJECTION NOTICE] Token ${updatedToken.token_number} (${updatedToken.farmer_name}): Crop lot REJECTED during Quality Inspection. Moisture: ${qcResult?.moisture}%. Lot Disqualified for procurement.`;
+      msgHi = `[ई-मंडी अस्वीकृति] टोकन ${updatedToken.token_number} (${updatedToken.farmer_name}): गुणवत्ता जाँच में उपज अस्वीकृत पाई गई। उपार्जन रद्द।`;
+    } else if (finalStatus === 'In Queue') {
       eventName = 'QUEUE_ADVANCED';
       msgEn = `[e-MANDI GATE ENTRY] Token ${updatedToken.token_number} (${updatedToken.farmer_name}): Gate entry verified at ${updatedToken.center_name}. Position #${updatedToken.queue_position}.`;
       msgHi = `[ई-मंडी प्रवेश] टोकन ${updatedToken.token_number} (${updatedToken.farmer_name}): गेट पर सत्यापन सफल। कतार स्थान: #${updatedToken.queue_position}।`;
-    } else if (nextStatus === 'Quality Check') {
+    } else if (finalStatus === 'Quality Check') {
       eventName = 'QUALITY_CHECK_DONE';
-      msgEn = `[e-MANDI LAB TEST] Token ${updatedToken.token_number}: Quality inspection passed. Grade: ${qcResult?.grade || 'Grade A'}. Moisture: ${qcResult?.moisture || '11%'}%.`;
-      msgHi = `[ई-मंडी लैब जाँच] टोकन ${updatedToken.token_number}: गुणवत्ता परीक्षण पास। ग्रेड: ${qcResult?.grade || 'Grade A'}। नमी: ${qcResult?.moisture || '11%'}%।`;
-    } else if (nextStatus === 'Procured') {
+      msgEn = `[e-MANDI LAB TEST] Token ${updatedToken.token_number}: Quality inspection passed (${qcResult?.grade || 'Grade A'}). Offered Rate: ₹${updatedToken.msp_rate}/Qtl.`;
+      msgHi = `[ई-मंडी लैब जाँच] टोकन ${updatedToken.token_number}: गुणवत्ता परीक्षण पास (${qcResult?.grade || 'Grade A'})। स्वीकृत दर: ₹${updatedToken.msp_rate}/क्विंटल।`;
+    } else if (finalStatus === 'Procured') {
       eventName = 'PROCURED';
-      msgEn = `[e-MANDI WEIGHBRIDGE] Token ${updatedToken.token_number}: ${updatedToken.quantity} Qtl ${updatedToken.crop} weighed & procured at MSP ₹${updatedToken.msp_rate}/Qtl. Gross amount: ₹${updatedToken.payment_amount.toLocaleString('en-IN')}.`;
+      msgEn = `[e-MANDI WEIGHBRIDGE] Token ${updatedToken.token_number}: ${updatedToken.quantity} Qtl ${updatedToken.crop} weighed & procured at ₹${updatedToken.msp_rate}/Qtl. Gross amount: ₹${updatedToken.payment_amount.toLocaleString('en-IN')}.`;
       msgHi = `[ई-मंडी तौल] टोकन ${updatedToken.token_number}: ${updatedToken.quantity} क्विंटल ${updatedToken.crop} का उपार्जन दर्ज हुआ। कुल राशि: ₹${updatedToken.payment_amount.toLocaleString('en-IN')}।`;
     }
 

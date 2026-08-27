@@ -13,11 +13,21 @@ export const QualityCheckModal: React.FC<QCModalProps> = ({ token, isOpen, onClo
   const [grade, setGrade] = useState<QualityCheckResult['grade']>('Grade A (FAQ)');
   const [moisture, setMoisture] = useState<number>(11.2);
   const [impurities, setImpurities] = useState<number>(0.9);
+  const [offeredRate, setOfferedRate] = useState<number>(token.msp_rate || 2275);
   const [notes, setNotes] = useState<string>('Standard Fair Average Quality (FAQ). Uniform grain, dry and pest-free.');
   const [inspectorName, setInspectorName] = useState<string>('Dr. A. K. Sharma (Mandi QC)');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   if (!isOpen) return null;
+
+  const handleGradeChange = (newGrade: QualityCheckResult['grade']) => {
+    setGrade(newGrade);
+    const baseMsp = token.msp_rate || 2275;
+    if (newGrade === 'Grade A (FAQ)') setOfferedRate(baseMsp);
+    else if (newGrade === 'Grade B') setOfferedRate(Math.round(baseMsp * 0.95));
+    else if (newGrade === 'Grade C') setOfferedRate(Math.round(baseMsp * 0.88));
+    else if (newGrade === 'Rejected') setOfferedRate(0);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -27,6 +37,7 @@ export const QualityCheckModal: React.FC<QCModalProps> = ({ token, isOpen, onClo
         grade,
         moisture: Number(moisture),
         impurities: Number(impurities),
+        offered_rate: grade === 'Rejected' ? 0 : Number(offeredRate),
         notes,
         inspector_name: inspectorName,
         inspected_at: new Date().toISOString()
@@ -75,16 +86,18 @@ export const QualityCheckModal: React.FC<QCModalProps> = ({ token, isOpen, onClo
                 <button
                   key={g}
                   type="button"
-                  onClick={() => setGrade(g)}
+                  onClick={() => handleGradeChange(g)}
                   className={`p-2.5 rounded-lg border text-xs font-bold text-left transition-all ${
                     grade === g
-                      ? 'border-emerald-600 bg-emerald-50 text-emerald-900 ring-1 ring-emerald-600'
+                      ? g === 'Rejected'
+                        ? 'border-red-600 bg-red-50 text-red-900 ring-1 ring-red-600'
+                        : 'border-emerald-600 bg-emerald-50 text-emerald-900 ring-1 ring-emerald-600'
                       : 'border-stone-200 text-stone-700 hover:border-stone-300'
                   }`}
                 >
                   <div className="flex items-center justify-between">
                     <span>{g}</span>
-                    {grade === g && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />}
+                    {grade === g && <CheckCircle2 className={`w-3.5 h-3.5 ${g === 'Rejected' ? 'text-red-600' : 'text-emerald-600'}`} />}
                   </div>
                 </button>
               ))}
@@ -132,6 +145,39 @@ export const QualityCheckModal: React.FC<QCModalProps> = ({ token, isOpen, onClo
               </div>
               <span className="text-[10px] text-stone-500 mt-0.5 block">Limit: ≤ 2.0%</span>
             </div>
+          </div>
+
+          {/* Quality Price / Offered Rate Adjustment */}
+          <div className="p-3 bg-stone-50 rounded-xl border border-stone-200 space-y-1.5">
+            <div className="flex items-center justify-between text-xs">
+              <label className="font-bold text-stone-800">
+                Offered Procurement Rate (गुणवत्ता दर - ₹/Qtl)
+              </label>
+              <span className="text-[11px] text-stone-500 font-mono">
+                MSP: ₹{token.msp_rate}/Qtl
+              </span>
+            </div>
+            <div className="relative">
+              <span className="absolute left-3 top-2 text-sm font-bold text-stone-500 font-mono">₹</span>
+              <input
+                type="number"
+                min="0"
+                max="25000"
+                disabled={grade === 'Rejected'}
+                value={offeredRate}
+                onChange={e => setOfferedRate(Math.max(0, Number(e.target.value)))}
+                className="w-full pl-7 pr-16 py-1.5 rounded-lg border border-stone-300 font-mono font-bold text-sm focus:ring-2 focus:ring-emerald-500 disabled:bg-stone-100 disabled:text-stone-400"
+                required
+              />
+              <span className="absolute right-3 top-2 text-xs font-bold text-stone-400">
+                PER QTL
+              </span>
+            </div>
+            <p className="text-[11px] text-stone-500">
+              {grade === 'Rejected' 
+                ? '❌ Lot is rejected. Offered procurement rate set to ₹0.' 
+                : `Gross Payout for ${token.quantity} Qtl: ₹${(token.quantity * offeredRate).toLocaleString('en-IN')}`}
+            </p>
           </div>
 
           {/* Notes */}

@@ -142,6 +142,7 @@ export const DailyLogRegister: React.FC<DailyLogProps> = ({ tokens, centerName }
           <option value="Quality Check">Quality Check</option>
           <option value="Procured">Procured</option>
           <option value="Payment Sent">Payment Sent</option>
+          <option value="Rejected">Rejected</option>
         </select>
       </div>
 
@@ -190,7 +191,11 @@ export const DailyLogRegister: React.FC<DailyLogProps> = ({ tokens, centerName }
                   </td>
                   <td className="py-2.5 px-3">
                     {tok.quality_check_result ? (
-                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                        tok.quality_check_result.grade === 'Rejected'
+                          ? 'bg-red-100 text-red-800 border border-red-200'
+                          : 'bg-emerald-100 text-emerald-800'
+                      }`}>
                         {tok.quality_check_result.grade.split(' ')[0]} ({tok.quality_check_result.moisture}%)
                       </span>
                     ) : (
@@ -200,7 +205,9 @@ export const DailyLogRegister: React.FC<DailyLogProps> = ({ tokens, centerName }
                   <td className="py-2.5 px-3">
                     <span
                       className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                        tok.status === 'Payment Sent'
+                        tok.status === 'Rejected' || tok.quality_check_result?.grade === 'Rejected'
+                          ? 'bg-red-100 text-red-800 border border-red-300'
+                          : tok.status === 'Payment Sent'
                           ? 'bg-emerald-100 text-emerald-800'
                           : tok.status === 'Procured'
                           ? 'bg-blue-100 text-blue-800'
@@ -211,7 +218,7 @@ export const DailyLogRegister: React.FC<DailyLogProps> = ({ tokens, centerName }
                           : 'bg-stone-100 text-stone-700'
                       }`}
                     >
-                      {tok.status}
+                      {tok.status === 'Rejected' || tok.quality_check_result?.grade === 'Rejected' ? 'Rejected' : tok.status}
                     </span>
                   </td>
                   <td className="py-2.5 px-3 font-mono text-[11px] text-stone-600">

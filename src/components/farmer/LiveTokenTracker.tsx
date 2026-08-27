@@ -37,6 +37,7 @@ export const LiveTokenTracker: React.FC<{ token: Token; onBookAnother: () => voi
     'Quality Check': 2,
     'Procured': 3,
     'Payment Sent': 4,
+    'Rejected': -1,
     'Cancelled': -1
   };
 
