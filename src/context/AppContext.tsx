@@ -1,11 +1,13 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { AppLanguage, AppRole, Center, Farmer, SMSLog, Token } from '../types';
-import { translations } from '../utils/translations';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import { AppLanguage, AppRole, Center, Farmer, QualityCheckResult, SMSLog, Token } from '../types';
+import { translations, MSP_DATA } from '../utils/translations';
 import { 
   FALLBACK_CENTERS, 
   FALLBACK_TOKENS, 
   FALLBACK_SMS_LOGS 
 } from '../utils/clientFallback';
+import { supabaseClient, syncTokenToSupabase } from '../utils/supabaseClient';
+import { CreateTokenSchema, AdvanceStatusSchema } from '../utils/validation';
 
 interface AppContextType {
   role: AppRole;
@@ -39,8 +41,8 @@ interface AppContextType {
   setNewSmsAlert: (sms: SMSLog | null) => void;
   
   // Actions
-  createToken: (data: any) => Promise<Token>;
-  advanceTokenStatus: (tokenId: string, nextStatus: Token['status'], qcResult?: any, note?: string) => Promise<Token>;
+  createToken: (data: Partial<Token>) => Promise<Token>;
+  advanceTokenStatus: (tokenId: string, nextStatus: Token['status'], qcResult?: QualityCheckResult, note?: string) => Promise<Token>;
   simulatePaymentWebhook: (tokenId: string) => Promise<void>;
   resetDemoData: () => Promise<void>;
   
@@ -56,7 +58,10 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
-import { supabaseClient, syncTokenToSupabase } from '../utils/supabaseClient';
+// Helper to check if local Express dev server is running (H-1 / M-4)
+const isLocalDevServer = (): boolean => {
+  return typeof window !== 'undefined' && import.meta.env.DEV && window.location.port === '3000';
+};
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [role, setRole] = useState<AppRole>('farmer');
@@ -64,7 +69,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [centers, setCenters] = useState<Center[]>(FALLBACK_CENTERS);
   const [selectedCenterId, setSelectedCenterId] = useState<string>('c-rau');
   
-  // Default Ramesh with localStorage persistence
+  // Ref for optimistic sync tracking to avoid 1.5s poll flicker race condition (H-3)
+  const pendingSyncTokens = useRef<Set<string>>(new Set());
+
+  // Default Ramesh with localStorage persistence (L-4: no full Aadhaar stored)
   const [currentFarmer, setCurrentFarmer] = useState<Farmer | null>(() => {
     try {
       const saved = localStorage.getItem('mandi_current_farmer');
@@ -77,14 +85,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       village: 'Rau Village',
       district: 'Indore',
       aadhaar_last4: '7821',
-      aadhaar_number: '7821 4509 1234',
       bank_account_last4: '4509',
       is_aadhaar_verified: true,
       created_at: new Date().toISOString()
     };
   });
 
-  // Persistent Tokens State across sessions & devices
+  // Persistent Tokens State across sessions & devices (M-7: capped history)
   const [allTokens, setAllTokens] = useState<Token[]>(() => {
     try {
       const saved = localStorage.getItem('mandi_all_tokens');
@@ -117,16 +124,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return FALLBACK_SMS_LOGS;
   });
   const [newSmsAlert, setNewSmsAlert] = useState<SMSLog | null>(null);
-  const [isConnected, setIsConnected] = useState<boolean>(true);
+  
+  // L-1: isConnected starts false and reflects real Supabase connectivity
+  const [isConnected, setIsConnected] = useState<boolean>(false);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
   const [voiceEnabled, setVoiceEnabled] = useState<boolean>(false);
 
   const t = translations[language];
 
-  // Auto-save state changes to LocalStorage & Sync Supabase DB on mount
+  // Auto-save state changes to LocalStorage (M-7: Cap to last 100 tokens to avoid quota failure)
   useEffect(() => {
     try {
-      localStorage.setItem('mandi_all_tokens', JSON.stringify(allTokens));
+      const capped = allTokens.slice(0, 100);
+      localStorage.setItem('mandi_all_tokens', JSON.stringify(capped));
     } catch (e) {}
   }, [allTokens]);
 
@@ -139,7 +149,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   useEffect(() => {
     try {
-      localStorage.setItem('mandi_sms_logs', JSON.stringify(smsLogs));
+      localStorage.setItem('mandi_sms_logs', JSON.stringify(smsLogs.slice(0, 50)));
     } catch (e) {}
   }, [smsLogs]);
 
@@ -182,12 +192,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Supabase Initial Sync & High-Frequency Cross-Device Sync (3s Polling + Realtime WebSockets)
   useEffect(() => {
-    if (!supabaseClient) return;
+    if (!supabaseClient) {
+      setIsConnected(false);
+      return;
+    }
 
-    const parseRemote = (d: any): Token => ({
-      ...d,
+    const parseRemote = (d: Record<string, any>): Token => ({
+      token_id: d.token_id,
+      farmer_id: d.farmer_id,
+      farmer_name: d.farmer_name,
+      farmer_phone: d.farmer_phone,
+      farmer_village: d.farmer_village,
+      center_id: d.center_id,
+      center_name: d.center_name,
+      crop: d.crop,
+      quantity: Number(d.quantity),
+      msp_rate: Number(d.msp_rate),
+      preferred_slot: d.preferred_slot,
+      token_number: d.token_number,
+      queue_position: Number(d.queue_position || 0),
+      estimated_time: d.estimated_time || '~15 mins',
+      estimated_minutes: Number(d.estimated_minutes || 15),
+      status: d.status,
       quality_check_result: typeof d.quality_check_result === 'string' ? JSON.parse(d.quality_check_result) : d.quality_check_result,
-      status_history: typeof d.status_history === 'string' ? JSON.parse(d.status_history) : (d.status_history || [])
+      payment_amount: Number(d.payment_amount || 0),
+      payment_method: d.payment_method,
+      payment_reference: d.payment_reference,
+      payment_confirmed_at: d.payment_confirmed_at,
+      status_history: typeof d.status_history === 'string' ? JSON.parse(d.status_history) : (d.status_history || []),
+      created_at: d.created_at,
+      updated_at: d.updated_at
     });
 
     const loadSupabaseTokens = async () => {
@@ -199,9 +233,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             allTokens.forEach(t => syncTokenToSupabase(t));
           } else {
             const remoteTokens: Token[] = data.map(parseRemote);
-            // Supabase Cloud Database is 100% authoritative for all multi-device sessions
-            setAllTokens(remoteTokens);
+            
+            // H-3: Avoid clobbering pending local optimistic mutations
+            setAllTokens(prev => {
+              const pendingIds = pendingSyncTokens.current;
+              if (pendingIds.size === 0) {
+                return remoteTokens;
+              }
+              // Merge preserving pending local tokens
+              const remoteMap = new Map(remoteTokens.map(t => [t.token_id, t]));
+              return prev.map(localT => {
+                if (pendingIds.has(localT.token_id)) {
+                  return localT; // keep optimistic state until sync confirmed
+                }
+                return remoteMap.get(localT.token_id) || localT;
+              });
+            });
             setLastUpdated(new Date());
+            setIsConnected(true);
           }
         } else if (error) {
           console.error('[Supabase Fetch Error]', error.message, error.details, error.hint);
@@ -213,16 +262,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     loadSupabaseTokens();
 
-    // 1-Second High Frequency Sync Loop for Cross-Device Phone <-> Laptop
-    const interval = setInterval(loadSupabaseTokens, 1500);
-
-    // Supabase Realtime WebSocket Listener for Immediate Push
+    // Supabase Realtime WebSocket Listener for Immediate Push (L-1)
     const channel = supabaseClient
       .channel('realtime:tokens')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tokens' }, payload => {
-        const newRecord = payload.new as any;
+        const newRecord = payload.new as Record<string, any>;
         if (newRecord && newRecord.token_id) {
           const formatted = parseRemote(newRecord);
+          // If this record was pending, remove from pendingSync set as remote is now confirmed
+          pendingSyncTokens.current.delete(formatted.token_id);
+
           setAllTokens(prev => {
             const exists = prev.some(t => t.token_id === formatted.token_id);
             if (exists) {
@@ -234,27 +283,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setLastUpdated(new Date());
         }
       })
-      .subscribe();
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          setIsConnected(true);
+        } else if (status === 'CLOSED' || status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          setIsConnected(false);
+        }
+      });
+
+    // 2.5s Polling loop for guaranteed state sync across all 3+ active devices
+    const pollInterval = setInterval(loadSupabaseTokens, 2500);
 
     return () => {
-      clearInterval(interval);
+      clearInterval(pollInterval);
       supabaseClient.removeChannel(channel);
     };
   }, []);
 
   // Fetch Centers
   const fetchCenters = useCallback(async () => {
-    try {
-      const res = await fetch('/api/centers');
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
-          setCenters(data);
-          return;
+    if (isLocalDevServer()) {
+      try {
+        const res = await fetch('/api/centers');
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data) && data.length > 0) {
+            setCenters(data);
+            return;
+          }
         }
+      } catch (err) {
+        // use fallback
       }
-    } catch (err) {
-      console.warn('Error fetching centers from API, using client fallback:', err);
     }
     setCenters(FALLBACK_CENTERS);
   }, []);
@@ -262,18 +322,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Fetch Center Queue
   const refreshCenterQueue = useCallback(async () => {
     if (!selectedCenterId) return;
-    try {
-      const res = await fetch(`/api/centers/${selectedCenterId}/queue`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data && Array.isArray(data.queue)) {
-          setCenterQueue(data.queue);
-          setLastUpdated(new Date());
-          return;
+    if (isLocalDevServer()) {
+      try {
+        const res = await fetch(`/api/centers/${selectedCenterId}/queue`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && Array.isArray(data.queue)) {
+            setCenterQueue(data.queue);
+            setLastUpdated(new Date());
+            return;
+          }
         }
+      } catch (err) {
+        // use fallback
       }
-    } catch (err) {
-      console.warn('Error fetching queue from API, using client fallback:', err);
     }
     setCenterQueue(allTokens.filter(t => t.center_id === selectedCenterId));
     setLastUpdated(new Date());
@@ -283,19 +345,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const refreshFarmerTokens = useCallback(async (phone?: string) => {
     const targetPhone = phone || currentFarmer?.phone;
     if (!targetPhone) return;
-    try {
-      const res = await fetch(`/api/farmers/${targetPhone}/tokens`);
-      if (res.ok) {
-        const data: Token[] = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
-          setFarmerTokens(data);
-          const found = activeToken ? data.find(t => t.token_id === activeToken.token_id) : data[0];
-          setActiveToken(found || data[0]);
-          return;
+    if (isLocalDevServer()) {
+      try {
+        const res = await fetch(`/api/farmers/${targetPhone}/tokens`);
+        if (res.ok) {
+          const data: Token[] = await res.json();
+          if (Array.isArray(data) && data.length > 0) {
+            setFarmerTokens(data);
+            const found = activeToken ? data.find(t => t.token_id === activeToken.token_id) : data[0];
+            setActiveToken(found || data[0]);
+            return;
+          }
         }
+      } catch (err) {
+        // fallback
       }
-    } catch (err) {
-      console.warn('Error fetching farmer tokens from API, using client fallback:', err);
     }
     const filtered = allTokens.filter(t => t.farmer_phone === targetPhone);
     setFarmerTokens(filtered);
@@ -306,17 +370,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Fetch SMS Logs
   const refreshSmsLogs = useCallback(async () => {
-    try {
-      const res = await fetch('/api/sms-log');
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
-          setSmsLogs(data);
-          return;
+    if (isLocalDevServer()) {
+      try {
+        const res = await fetch('/api/sms-log');
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data) && data.length > 0) {
+            setSmsLogs(data);
+            return;
+          }
         }
+      } catch (err) {
+        // fallback
       }
-    } catch (err) {
-      console.warn('Error fetching SMS logs from API, using client fallback:', err);
     }
     setSmsLogs(FALLBACK_SMS_LOGS);
   }, []);
@@ -337,27 +403,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [currentFarmer, refreshFarmerTokens]);
 
-  // Realtime SSE Listener + Fallback Polling
+  // Realtime SSE Listener (Dev only)
   useEffect(() => {
-    let eventSource: EventSource | null = null;
+    if (!isLocalDevServer()) return;
 
+    let eventSource: EventSource | null = null;
     try {
       eventSource = new EventSource('/api/events');
-      
-      eventSource.onopen = () => {
-        setIsConnected(true);
-      };
-
-      eventSource.addEventListener('connected', () => {
-        setIsConnected(true);
-      });
-
+      eventSource.onopen = () => setIsConnected(true);
       eventSource.addEventListener('token_created', () => {
         refreshCenterQueue();
         if (currentFarmer?.phone) refreshFarmerTokens(currentFarmer.phone);
         refreshSmsLogs();
       });
-
       eventSource.addEventListener('token_updated', (e) => {
         const updatedToken: Token = JSON.parse(e.data);
         refreshCenterQueue();
@@ -367,83 +425,63 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
         refreshSmsLogs();
       });
-
-      eventSource.addEventListener('queue_updated', () => {
-        refreshCenterQueue();
-        if (currentFarmer?.phone) refreshFarmerTokens(currentFarmer.phone);
-      });
-
       eventSource.addEventListener('sms_sent', (e) => {
         const newLog: SMSLog = JSON.parse(e.data);
         setSmsLogs(prev => [newLog, ...prev]);
         setNewSmsAlert(newLog);
       });
-
-      eventSource.addEventListener('seed_reset', () => {
-        fetchCenters();
-        refreshCenterQueue();
-        if (currentFarmer?.phone) refreshFarmerTokens(currentFarmer.phone);
-        refreshSmsLogs();
-      });
-
       eventSource.onerror = () => {
-        // Mark as connected/ready in static hosting mode
-        setIsConnected(true);
+        // don't mask error
       };
-    } catch (err) {
-      setIsConnected(true);
-    }
-
-    const interval = setInterval(() => {
-      refreshCenterQueue();
-      if (currentFarmer?.phone) refreshFarmerTokens(currentFarmer.phone);
-    }, 10000);
+    } catch (err) {}
 
     return () => {
       if (eventSource) eventSource.close();
-      clearInterval(interval);
     };
-  }, [selectedCenterId, currentFarmer?.phone, activeToken?.token_id, refreshCenterQueue, refreshFarmerTokens, refreshSmsLogs, fetchCenters]);
+  }, [selectedCenterId, currentFarmer?.phone, activeToken?.token_id, refreshCenterQueue, refreshFarmerTokens, refreshSmsLogs]);
 
-  // Token Creation Action
-  const createToken = async (data: any): Promise<Token> => {
-    try {
-      const res = await fetch('/api/tokens', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data)
-      });
-      if (res.ok) {
-        const token = await res.json();
-        setActiveToken(token);
-        await refreshFarmerTokens(token.farmer_phone);
-        await refreshCenterQueue();
-        await refreshSmsLogs();
-        return token;
-      }
-    } catch (err) {
-      console.warn('API create token failed, using client fallback:', err);
-    }
-
+  // Token Creation Action (H-2: Monotonic sequence; M-5: crypto.randomUUID; H-3: pendingSync)
+  const createToken = async (data: Partial<Token>): Promise<Token> => {
     const nowIso = new Date().toISOString();
+    const tokenUid = `t-${typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID().slice(0, 8) : Date.now()}`;
+    const selectedCrop = (data.crop || 'Wheat (गेहूं)') as any;
+    const officialRate = (MSP_DATA as any)[selectedCrop]?.rate || 2275;
+    const quantityNum = Number(data.quantity || 10);
+    const targetCenterId = data.center_id || selectedCenterId || 'c-rau';
+    const centerInfo = centers.find(c => c.center_id === targetCenterId);
+
+    // Compute monotonic token number (H-2 / Collision prevention)
+    const existingNums = allTokens
+      .map(t => {
+        const match = (t.token_number || '').match(/A-(\d+)/);
+        return match ? parseInt(match[1], 10) : 100;
+      })
+      .filter(n => !isNaN(n));
+    const maxSeq = existingNums.length > 0 ? Math.max(...existingNums) : 106;
+    const nextTokenNumber = `A-${maxSeq + 1}`;
+
+    const activeInCenter = allTokens.filter(t => t.center_id === targetCenterId && ['Registered', 'In Queue', 'Quality Check'].includes(t.status)).length;
+    const initialPosition = activeInCenter + 1;
+    const estimatedMin = initialPosition * (centerInfo?.avg_service_time_min || 10);
+
     const newToken: Token = {
-      token_id: `t-${Date.now()}`,
+      token_id: tokenUid,
       farmer_id: data.farmer_id || currentFarmer?.farmer_id || 'f-ramesh',
       farmer_name: data.farmer_name || currentFarmer?.name || 'Ramesh Kumar',
       farmer_phone: data.farmer_phone || currentFarmer?.phone || '9876543210',
       farmer_village: data.farmer_village || currentFarmer?.village || 'Rau Village',
-      center_id: data.center_id,
-      center_name: centers.find(c => c.center_id === data.center_id)?.name || 'Procurement Center',
-      crop: data.crop,
-      quantity: Number(data.quantity),
-      msp_rate: Number(data.msp_rate || 2275),
+      center_id: targetCenterId,
+      center_name: centerInfo?.name || 'Procurement Center',
+      crop: selectedCrop,
+      quantity: quantityNum,
+      msp_rate: officialRate,
       preferred_slot: data.preferred_slot || '07:00 AM - 09:00 AM',
-      token_number: `A-${Math.floor(107 + Math.random() * 90)}`,
-      queue_position: centerQueue.length + 1,
-      estimated_time: '~20 mins',
-      estimated_minutes: 20,
+      token_number: nextTokenNumber,
+      queue_position: initialPosition,
+      estimated_time: `~${estimatedMin} mins`,
+      estimated_minutes: estimatedMin,
       status: 'Registered',
-      payment_amount: Number(data.quantity) * Number(data.msp_rate || 2275),
+      payment_amount: quantityNum * officialRate,
       status_history: [
         { status: 'Registered', timestamp: nowIso, note: 'Digital token generated via Mandi Queue' }
       ],
@@ -451,14 +489,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       updated_at: nowIso
     };
 
+    // Optimistic UI state update
+    pendingSyncTokens.current.add(newToken.token_id);
     setAllTokens(prev => [newToken, ...prev]);
     setActiveToken(newToken);
     setCenterQueue(prev => [newToken, ...prev]);
     setFarmerTokens(prev => [newToken, ...prev]);
-    
-    // Async Live Database Sync
-    syncTokenToSupabase(newToken);
 
+    // Live Database Sync (C-2 / Group 1)
+    syncTokenToSupabase(newToken).then(() => {
+      pendingSyncTokens.current.delete(newToken.token_id);
+    });
+
+    // SMS Log Simulation
     const createSms: SMSLog = {
       id: `sms-${Date.now()}`,
       token_id: newToken.token_id,
@@ -476,28 +519,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return newToken;
   };
 
-  // Status Advance Action
-  const advanceTokenStatus = async (tokenId: string, nextStatus: Token['status'], qcResult?: any, note?: string): Promise<Token> => {
-    try {
-      const res = await fetch(`/api/tokens/${tokenId}/status`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: nextStatus, quality_check_result: qcResult, note })
-      });
-      if (res.ok) {
-        const token = await res.json();
-        if (activeToken?.token_id === tokenId) {
-          setActiveToken(token);
-        }
-        await refreshCenterQueue();
-        await refreshFarmerTokens();
-        await refreshSmsLogs();
-        return token;
-      }
-    } catch (err) {
-      console.warn('API advance status failed, using client fallback:', err);
-    }
-
+  // Status Advance Action (M-6: Queue positions decrement automatically)
+  const advanceTokenStatus = async (
+    tokenId: string, 
+    nextStatus: Token['status'], 
+    qcResult?: QualityCheckResult, 
+    note?: string
+  ): Promise<Token> => {
     const nowIso = new Date().toISOString();
     let targetToken = allTokens.find(t => t.token_id === tokenId) || centerQueue.find(t => t.token_id === tokenId) || activeToken;
     if (!targetToken) {
@@ -517,6 +545,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       msp_rate: rate,
       payment_amount: newPaymentAmount,
       quality_check_result: qcResult || targetToken.quality_check_result,
+      queue_position: ['Procured', 'Payment Sent', 'Rejected', 'Cancelled'].includes(finalStatus) ? 0 : targetToken.queue_position,
       status_history: [
         ...(targetToken.status_history || []),
         { status: finalStatus, timestamp: nowIso, note: note || `Status updated to ${finalStatus}` }
@@ -524,13 +553,54 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       updated_at: nowIso
     };
 
-    setAllTokens(prev => prev.map(t => t.token_id === tokenId ? updatedToken : t));
-    setCenterQueue(prev => prev.map(t => t.token_id === tokenId ? updatedToken : t));
-    setFarmerTokens(prev => prev.map(t => t.token_id === tokenId ? updatedToken : t));
+    pendingSyncTokens.current.add(tokenId);
+
+    // M-6: Recalculate queue positions for all remaining active tokens at this center
+    const centerId = targetToken.center_id;
+    const centerInfo = centers.find(c => c.center_id === centerId);
+    const avgMin = centerInfo?.avg_service_time_min || 10;
+
+    setAllTokens(prev => {
+      // 1. Update target token
+      const nextList = prev.map(t => t.token_id === tokenId ? updatedToken : t);
+      
+      // 2. Identify remaining active tokens in center (In Queue / Registered)
+      const activeWaiting = nextList
+        .filter(t => t.center_id === centerId && (t.status === 'In Queue' || t.status === 'Registered'))
+        .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+
+      // 3. Re-index queue positions
+      const positionMap = new Map<string, { pos: number; estMins: number; estTime: string }>();
+      activeWaiting.forEach((tok, idx) => {
+        const pos = idx + 1;
+        const estMins = pos * avgMin;
+        const estTime = pos === 1 ? '~5 mins (Next in line)' : `~${estMins} mins`;
+        positionMap.set(tok.token_id, { pos, estMins, estTime });
+      });
+
+      // 4. Return new array with updated queue positions
+      return nextList.map(tok => {
+        if (positionMap.has(tok.token_id)) {
+          const info = positionMap.get(tok.token_id)!;
+          const updatedWaiting: Token = {
+            ...tok,
+            queue_position: info.pos,
+            estimated_minutes: info.estMins,
+            estimated_time: info.estTime
+          };
+          syncTokenToSupabase(updatedWaiting);
+          return updatedWaiting;
+        }
+        return tok;
+      });
+    });
+
     if (activeToken?.token_id === tokenId) setActiveToken(updatedToken);
 
-    // Async Live Database Sync
-    syncTokenToSupabase(updatedToken);
+    // Live Database Sync
+    syncTokenToSupabase(updatedToken).then(() => {
+      pendingSyncTokens.current.delete(tokenId);
+    });
 
     let eventName: SMSLog['trigger_event'] = 'QUEUE_ADVANCED';
     let msgEn = `[e-MANDI ALERT] Token ${updatedToken.token_number} status updated to ${finalStatus}.`;
@@ -538,7 +608,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (isRejected) {
       eventName = 'QUALITY_CHECK_DONE';
-      msgEn = `[e-MANDI REJECTION NOTICE] Token ${updatedToken.token_number} (${updatedToken.farmer_name}): Crop lot REJECTED during Quality Inspection. Moisture: ${qcResult?.moisture}%. Lot Disqualified for procurement.`;
+      msgEn = `[e-MANDI REJECTION NOTICE] Token ${updatedToken.token_number} (${updatedToken.farmer_name}): Crop lot REJECTED during Quality Inspection. Lot Disqualified for procurement.`;
       msgHi = `[ई-मंडी अस्वीकृति] टोकन ${updatedToken.token_number} (${updatedToken.farmer_name}): गुणवत्ता जाँच में उपज अस्वीकृत पाई गई। उपार्जन रद्द।`;
     } else if (finalStatus === 'In Queue') {
       eventName = 'QUEUE_ADVANCED';
@@ -573,28 +643,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Simulate Payment Webhook
   const simulatePaymentWebhook = async (tokenId: string) => {
-    try {
-      const res = await fetch(`/api/tokens/${tokenId}/payment-webhook`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reference_id: `UPI-DBT-${Math.floor(1000000000 + Math.random() * 9000000000)}` })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (activeToken?.token_id === tokenId) {
-          setActiveToken(data.token);
-        }
-        await refreshCenterQueue();
-        await refreshFarmerTokens();
-        await refreshSmsLogs();
-        return;
-      }
-    } catch (err) {
-      console.warn('API payment webhook failed, using client fallback:', err);
-    }
-
     const nowIso = new Date().toISOString();
-    let targetToken = allTokens.find(t => t.token_id === tokenId) || centerQueue.find(t => t.token_id === tokenId) || activeToken;
+    const targetToken = allTokens.find(t => t.token_id === tokenId) || centerQueue.find(t => t.token_id === tokenId) || activeToken;
     if (targetToken) {
       const updatedToken: Token = {
         ...targetToken,
@@ -602,15 +652,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         payment_confirmed_at: nowIso,
         payment_reference: `UPI-DBT-${Math.floor(1000000000 + Math.random() * 9000000000)}`,
         payment_method: 'DBT Direct Bank Transfer / UPI',
+        queue_position: 0,
         updated_at: nowIso
       };
+      
+      pendingSyncTokens.current.add(tokenId);
       setAllTokens(prev => prev.map(t => t.token_id === tokenId ? updatedToken : t));
-      setCenterQueue(prev => prev.map(t => t.token_id === tokenId ? updatedToken : t));
-      setFarmerTokens(prev => prev.map(t => t.token_id === tokenId ? updatedToken : t));
       if (activeToken?.token_id === tokenId) setActiveToken(updatedToken);
 
-      // Async Live Database Sync
-      syncTokenToSupabase(updatedToken);
+      syncTokenToSupabase(updatedToken).then(() => {
+        pendingSyncTokens.current.delete(tokenId);
+      });
 
       const paymentSms: SMSLog = {
         id: `sms-${Date.now()}`,
@@ -628,7 +680,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Reset Demo Action
+  // Reset Demo Action (Clean atomic delete + seed)
   const resetDemoData = async () => {
     try {
       localStorage.removeItem('mandi_all_tokens');
@@ -636,10 +688,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localStorage.removeItem('mandi_current_farmer');
       if (supabaseClient) {
         await supabaseClient.from('tokens').delete().neq('token_id', '');
-        FALLBACK_TOKENS.forEach(t => syncTokenToSupabase(t));
+        await Promise.all(FALLBACK_TOKENS.map(t => syncTokenToSupabase(t)));
       }
     } catch (err) {
-      // ignore
+      console.warn('[Reset Demo Warning]', err);
     }
     setAllTokens(FALLBACK_TOKENS);
     setSmsLogs(FALLBACK_SMS_LOGS);
@@ -650,7 +702,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       village: 'Rau Village',
       district: 'Indore',
       aadhaar_last4: '7821',
-      aadhaar_number: '7821 4509 1234',
       bank_account_last4: '4509',
       is_aadhaar_verified: true,
       created_at: new Date().toISOString()
@@ -668,30 +719,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     window.speechSynthesis.speak(utterance);
   };
 
-  // Update Farmer Profile Action
+  // Update Farmer Profile Action (L-4: Strict Aadhaar masking)
   const updateFarmerProfile = async (updates: Partial<Farmer>): Promise<Farmer> => {
     if (!currentFarmer) throw new Error('No active farmer');
-    try {
-      const res = await fetch(`/api/farmers/${currentFarmer.farmer_id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates)
-      });
-      if (res.ok) {
-        const updated: Farmer = await res.json();
-        setCurrentFarmer(updated);
-        return updated;
-      }
-    } catch (err) {
-      console.warn('API update farmer profile failed, using client fallback:', err);
-    }
 
-    const cleanAadhaar = updates.aadhaar_number ? updates.aadhaar_number.replace(/\D/g, '') : '';
     const updatedFarmer: Farmer = {
       ...currentFarmer,
       ...updates,
-      aadhaar_last4: cleanAadhaar.length >= 4 ? cleanAadhaar.slice(-4) : currentFarmer.aadhaar_last4,
-      is_aadhaar_verified: cleanAadhaar.length === 12
+      aadhaar_last4: updates.aadhaar_last4 || currentFarmer.aadhaar_last4,
+      bank_account_last4: updates.bank_account_last4 || currentFarmer.bank_account_last4,
+      is_aadhaar_verified: updates.is_aadhaar_verified ?? currentFarmer.is_aadhaar_verified
     };
     setCurrentFarmer(updatedFarmer);
     return updatedFarmer;

@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "sih-mandi",
-  "compatibility_date": "2024-09-23",
+  "compatibility_date": "2026-08-01",
   "compatibility_flags": [
     "nodejs_compat"
   ],
@@ -11,7 +11,7 @@
   "observability": {
     "enabled": false,
     "head_sampling_rate": 1,
-    "redact_query_string": false,
+    "redact_query_string": true,
     "logs": {
       "enabled": true,
       "head_sampling_rate": 1,

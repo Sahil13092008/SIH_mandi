@@ -66,9 +66,7 @@ export interface Farmer {
   village: string;
   district?: string;
   aadhaar_last4?: string;
-  aadhaar_number?: string;
   bank_account_last4?: string;
-  bank_account_number?: string;
   is_aadhaar_verified?: boolean;
   created_at: string;
 }

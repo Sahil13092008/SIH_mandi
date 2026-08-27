@@ -77,10 +77,16 @@ export const Header: React.FC = () => {
 
           {/* Right utility buttons: Language, Live Sync, Reset */}
           <div className="flex items-center gap-2 sm:gap-3">
-            {/* Live Sync Status */}
-            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-stone-100 text-stone-700 text-xs font-medium border border-stone-200">
+            {/* Live Sync Status (L-1) */}
+            <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
+              isConnected 
+                ? 'bg-emerald-50 text-emerald-800 border-emerald-200' 
+                : 'bg-stone-100 text-stone-600 border-stone-200'
+            }`}>
               <Radio className={`w-3.5 h-3.5 ${isConnected ? 'text-emerald-600 animate-pulse' : 'text-stone-400'}`} />
-              <span className="text-[11px] sm:text-xs font-semibold">{isConnected ? (t.liveSync || 'Live Sync Active') : 'Connecting...'}</span>
+              <span className="text-[11px] sm:text-xs font-semibold">
+                {isConnected ? (t.liveSync || 'Live Sync Active') : (language === 'hi' ? 'ऑफ़लाइन / स्टैंडअलोन' : 'Offline / Standalone')}
+              </span>
             </div>
 
             {/* Language Switcher */}

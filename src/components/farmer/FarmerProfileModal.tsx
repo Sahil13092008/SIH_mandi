@@ -28,11 +28,11 @@ export const FarmerProfileModal: React.FC<FarmerProfileModalProps> = ({ isOpen, 
   const [phone, setPhone] = useState(currentFarmer.phone || '');
   const [village, setVillage] = useState(currentFarmer.village || '');
   const [district, setDistrict] = useState(currentFarmer.district || 'Indore');
-  const [aadhaarNumber, setAadhaarNumber] = useState(
-    currentFarmer.aadhaar_number || (currentFarmer.aadhaar_last4 ? `7821 4509 ${currentFarmer.aadhaar_last4}` : '')
+  const [aadhaarInput, setAadhaarInput] = useState(
+    currentFarmer.aadhaar_last4 ? `•••• •••• ${currentFarmer.aadhaar_last4}` : ''
   );
-  const [bankAccountNumber, setBankAccountNumber] = useState(
-    currentFarmer.bank_account_number || (currentFarmer.bank_account_last4 ? `9982412891${currentFarmer.bank_account_last4}` : '')
+  const [bankAccountInput, setBankAccountInput] = useState(
+    currentFarmer.bank_account_last4 ? `••••••••${currentFarmer.bank_account_last4}` : ''
   );
 
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -43,11 +43,11 @@ export const FarmerProfileModal: React.FC<FarmerProfileModalProps> = ({ isOpen, 
   const handleAadhaarChange = (val: string) => {
     const raw = val.replace(/\D/g, '').slice(0, 12);
     const formatted = raw.replace(/(\d{4})(?=\d)/g, '$1 ');
-    setAadhaarNumber(formatted);
+    setAadhaarInput(formatted);
   };
 
-  const rawAadhaar = aadhaarNumber.replace(/\D/g, '');
-  const isAadhaarValid = rawAadhaar.length === 12;
+  const rawAadhaar = aadhaarInput.replace(/\D/g, '');
+  const isAadhaarValid = rawAadhaar.length === 12 || (currentFarmer.is_aadhaar_verified && Boolean(currentFarmer.aadhaar_last4));
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -60,6 +60,12 @@ export const FarmerProfileModal: React.FC<FarmerProfileModalProps> = ({ isOpen, 
       return;
     }
 
+    const cleanAadhaar = aadhaarInput.replace(/\D/g, '');
+    const cleanBank = bankAccountInput.replace(/\D/g, '');
+    const newLast4Aadhaar = cleanAadhaar.length >= 4 ? cleanAadhaar.slice(-4) : currentFarmer.aadhaar_last4;
+    const newLast4Bank = cleanBank.length >= 4 ? cleanBank.slice(-4) : currentFarmer.bank_account_last4;
+    const isVerified = cleanAadhaar.length === 12 || currentFarmer.is_aadhaar_verified;
+
     try {
       setIsSubmitting(true);
       setErrorMsg('');
@@ -70,8 +76,9 @@ export const FarmerProfileModal: React.FC<FarmerProfileModalProps> = ({ isOpen, 
           phone,
           village,
           district,
-          aadhaar_number: aadhaarNumber,
-          bank_account_number: bankAccountNumber
+          aadhaar_last4: newLast4Aadhaar,
+          bank_account_last4: newLast4Bank,
+          is_aadhaar_verified: isVerified
         });
       }
     } catch (err: any) {
@@ -79,17 +86,15 @@ export const FarmerProfileModal: React.FC<FarmerProfileModalProps> = ({ isOpen, 
     }
 
     // Always update current farmer state so modal NEVER fails for the user!
-    const clean = aadhaarNumber ? aadhaarNumber.replace(/\D/g, '') : '';
     setCurrentFarmer({
       ...currentFarmer,
       name,
       phone,
       village,
       district,
-      aadhaar_number: aadhaarNumber,
-      aadhaar_last4: clean.length >= 4 ? clean.slice(-4) : currentFarmer.aadhaar_last4,
-      is_aadhaar_verified: clean.length === 12,
-      bank_account_number: bankAccountNumber
+      aadhaar_last4: newLast4Aadhaar,
+      bank_account_last4: newLast4Bank,
+      is_aadhaar_verified: isVerified
     });
 
     setSaveSuccess(true);
@@ -238,7 +243,7 @@ export const FarmerProfileModal: React.FC<FarmerProfileModalProps> = ({ isOpen, 
             <div className="relative">
               <input
                 type="text"
-                value={aadhaarNumber}
+                value={aadhaarInput}
                 onChange={e => handleAadhaarChange(e.target.value)}
                 placeholder="e.g. 7821 4509 1234"
                 maxLength={14}
@@ -260,8 +265,8 @@ export const FarmerProfileModal: React.FC<FarmerProfileModalProps> = ({ isOpen, 
             </label>
             <input
               type="text"
-              value={bankAccountNumber}
-              onChange={e => setBankAccountNumber(e.target.value)}
+              value={bankAccountInput}
+              onChange={e => setBankAccountInput(e.target.value)}
               placeholder="e.g. 99824128914509"
               className="w-full px-3.5 py-2.5 rounded-xl border border-stone-300 text-stone-900 text-sm font-mono focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all"
             />

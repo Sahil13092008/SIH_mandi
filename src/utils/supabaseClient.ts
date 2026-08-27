@@ -1,7 +1,8 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { Token } from '../types';
 
-const SUPABASE_URL = (import.meta as any).env?.VITE_SUPABASE_URL || 'https://hfrzvhftrtvgcryyxmxx.supabase.co';
-const SUPABASE_ANON_KEY = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzIsInJlZiI6Imhmcnp2aGZ0cnR2Z2NyeXl4bXh4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc4MDU4MjksImV4cCI6MjEwMzM4MTgyOX0.Egj_utV5g72kxQCAbwPkW_5QbIjAVD8nxU86bZ5V3jg';
+const SUPABASE_URL: string = import.meta.env?.VITE_SUPABASE_URL || '';
+const SUPABASE_ANON_KEY: string = import.meta.env?.VITE_SUPABASE_ANON_KEY || '';
 
 export const isSupabaseConfigured = (): boolean => {
   return Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
@@ -12,9 +13,15 @@ let supabaseInstance: SupabaseClient | null = null;
 if (SUPABASE_URL && SUPABASE_ANON_KEY) {
   try {
     supabaseInstance = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-    console.log(`[Supabase] Client initialized with URL: ${SUPABASE_URL}`);
+    if (import.meta.env?.DEV) {
+      console.log('[Supabase] Client initialized successfully.');
+    }
   } catch (err) {
     console.warn('[Supabase] Failed to initialize client:', err);
+  }
+} else {
+  if (import.meta.env?.DEV) {
+    console.log('[Supabase] No credentials provided. Running in offline/fallback mode.');
   }
 }
 
@@ -24,8 +31,8 @@ export const supabase: SupabaseClient | null = supabaseInstance;
 /**
  * Helper to sync token upserts to Supabase table `tokens` asynchronously
  */
-export const syncTokenToSupabase = async (token: any) => {
-  if (!supabaseClient) return;
+export const syncTokenToSupabase = async (token: Partial<Token>): Promise<boolean> => {
+  if (!supabaseClient || !token.token_id) return false;
   try {
     const payload = {
       token_id: token.token_id,
@@ -53,10 +60,15 @@ export const syncTokenToSupabase = async (token: any) => {
     const { error } = await supabaseClient.from('tokens').upsert(payload, { onConflict: 'token_id' });
     if (error) {
       console.error('[Supabase Upsert Error]', error.message, error.details, error.hint);
+      return false;
     } else {
-      console.log(`[Supabase Sync Success] Token ${token.token_number} (${token.status}) synced to cloud DB.`);
+      if (import.meta.env?.DEV) {
+        console.log(`[Supabase Sync Success] Token ${token.token_number} (${token.status}) synced to cloud DB.`);
+      }
+      return true;
     }
   } catch (err) {
     console.error('[Supabase Sync Exception]', err);
+    return false;
   }
 };

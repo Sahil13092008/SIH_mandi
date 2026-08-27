@@ -289,12 +289,50 @@ export const getFallbackOverview = (
   const procuredTokens = tokensList.filter(t => ['Procured', 'Payment Sent'].includes(t.status));
   const totalQty = procuredTokens.reduce((acc, t) => acc + (t.quantity || 0), 0);
   const totalPayout = procuredTokens.reduce((acc, t) => acc + (t.payment_amount || 0), 0);
+  const cancelledCount = tokensList.filter(t => t.status === 'Cancelled' || t.status === 'Rejected').length;
+  const globalNoShowRate = tokensList.length > 0 ? Number(((cancelledCount / tokensList.length) * 100).toFixed(1)) : 0;
 
   const centerAnalytics = centersList.map(c => {
     const centerTokens = tokensList.filter(t => t.center_id === c.center_id);
     const centerProcured = centerTokens.filter(t => ['Procured', 'Payment Sent'].includes(t.status));
     const centerQty = centerProcured.reduce((acc, t) => acc + (t.quantity || 0), 0);
     const centerPayout = centerProcured.reduce((acc, t) => acc + (t.payment_amount || 0), 0);
+    const activeInCenter = centerTokens.filter(t => ['In Queue', 'Quality Check'].includes(t.status)).length;
+    const centerCancelled = centerTokens.filter(t => t.status === 'Cancelled' || t.status === 'Rejected').length;
+    const centerNoShow = centerTokens.length > 0 ? Number(((centerCancelled / centerTokens.length) * 100).toFixed(1)) : 0;
+    const avgWaitMin = Number((c.avg_service_time_min * Math.max(1, activeInCenter)).toFixed(1));
+
+    // Dynamic Crop Breakdown from actual tokens (H-5)
+    const uniqueCrops = Array.from(new Set(centerTokens.map(t => t.crop)));
+    const dynamicCropBreakdown = uniqueCrops.length > 0 
+      ? uniqueCrops.map(cropName => {
+          const matched = centerTokens.filter(t => t.crop === cropName);
+          const qty = matched.reduce((s, t) => s + (t.quantity || 0), 0);
+          const amt = matched.reduce((s, t) => s + (t.payment_amount || 0), 0);
+          return { crop: cropName, quantity: qty, amount: amt };
+        })
+      : [
+          { crop: 'Wheat (गेहूं)', quantity: 0, amount: 0 }
+        ];
+
+    // Dynamic Hourly Arrivals from actual token timestamps (H-6)
+    const standardHours = ['07:00 AM', '08:00 AM', '09:00 AM', '10:00 AM', '11:00 AM', '12:00 PM', '02:00 PM', '04:00 PM'];
+    const hourCounts: Record<string, number> = {};
+    standardHours.forEach(h => { hourCounts[h] = 0; });
+    centerTokens.forEach(t => {
+      try {
+        const d = new Date(t.created_at);
+        const hr = d.getHours();
+        const period = hr >= 12 ? 'PM' : 'AM';
+        const formattedHour = `${String(hr % 12 === 0 ? 12 : hr % 12).padStart(2, '0')}:00 ${period}`;
+        if (hourCounts[formattedHour] !== undefined) {
+          hourCounts[formattedHour] += 1;
+        } else {
+          hourCounts[formattedHour] = 1;
+        }
+      } catch (e) {}
+    });
+    const dynamicHourlyArrivals = standardHours.map(hour => ({ hour, count: hourCounts[hour] || 0 }));
 
     return {
       center_id: c.center_id,
@@ -303,33 +341,31 @@ export const getFallbackOverview = (
       procured_tokens_today: centerProcured.length,
       total_quantity_procured: centerQty,
       total_payout_inr: centerPayout,
-      avg_wait_time_minutes: Number((c.avg_service_time_min * 2.2).toFixed(2)),
-      no_show_rate: 3.5,
+      avg_wait_time_minutes: avgWaitMin,
+      no_show_rate: centerNoShow,
       capacity_utilization: Math.min(100, Math.round((centerQty / c.daily_capacity) * 100)),
-      crop_breakdown: [
-        { crop: 'Wheat (गेहूं)', quantity: 25, amount: 56875 },
-        { crop: 'Gram (चना)', quantity: 15, amount: 81600 }
-      ],
-      hourly_arrivals: [
-        { hour: '07:00 AM', count: 4 + centerTokens.length },
-        { hour: '08:00 AM', count: 7 },
-        { hour: '09:00 AM', count: 12 },
-        { hour: '10:00 AM', count: 15 },
-        { hour: '11:00 AM', count: 9 },
-        { hour: '12:00 PM', count: 6 },
-        { hour: '02:00 PM', count: 8 }
-      ]
+      crop_breakdown: dynamicCropBreakdown,
+      hourly_arrivals: dynamicHourlyArrivals
     };
   });
+
+  const avgWaitOverall = centerAnalytics.length > 0
+    ? Number((centerAnalytics.reduce((acc, c) => acc + c.avg_wait_time_minutes, 0) / centerAnalytics.length).toFixed(1))
+    : 15;
+
+  // Honest system efficiency score based on wait time & completion rate
+  const efficiencyScore = Number(
+    Math.min(100, Math.max(60, 100 - (globalNoShowRate * 1.5) - (avgWaitOverall > 20 ? (avgWaitOverall - 20) * 0.8 : 0))).toFixed(1)
+  );
 
   return {
     total_centers: centersList.length,
     active_centers: centersList.filter(c => c.operational_status !== 'Full').length,
-    total_farmers_served_today: procuredTokens.length + 18,
-    total_procurement_quintals: totalQty + 420,
-    total_disbursed_inr: totalPayout + 950000,
-    overall_avg_wait_time_min: 24,
-    system_efficiency_score: 96.4,
+    total_farmers_served_today: procuredTokens.length,
+    total_procurement_quintals: totalQty,
+    total_disbursed_inr: totalPayout,
+    overall_avg_wait_time_min: avgWaitOverall,
+    system_efficiency_score: efficiencyScore,
     center_performance: centerAnalytics
   };
 };

@@ -490,19 +490,16 @@ class HybridDatabaseService {
       ...updates
     };
 
-    if (updates.aadhaar_number !== undefined) {
-      const cleanAadhaar = updates.aadhaar_number.replace(/\D/g, '');
-      if (cleanAadhaar.length >= 4) {
-        updatedFarmer.aadhaar_last4 = cleanAadhaar.slice(-4);
-      }
-      updatedFarmer.is_aadhaar_verified = cleanAadhaar.length === 12;
+    if (updates.aadhaar_last4 !== undefined) {
+      updatedFarmer.aadhaar_last4 = updates.aadhaar_last4;
     }
 
-    if (updates.bank_account_number !== undefined) {
-      const cleanBank = updates.bank_account_number.replace(/\D/g, '');
-      if (cleanBank.length >= 4) {
-        updatedFarmer.bank_account_last4 = cleanBank.slice(-4);
-      }
+    if (updates.bank_account_last4 !== undefined) {
+      updatedFarmer.bank_account_last4 = updates.bank_account_last4;
+    }
+
+    if (updates.is_aadhaar_verified !== undefined) {
+      updatedFarmer.is_aadhaar_verified = updates.is_aadhaar_verified;
     }
 
     this.farmers.set(farmer_id, updatedFarmer);
@@ -530,7 +527,13 @@ class HybridDatabaseService {
     const center = this.centers.get(data.center_id) || Array.from(this.centers.values())[0];
     
     const existingTokens = Array.from(this.tokens.values()).filter(t => t.center_id === data.center_id);
-    const nextSeq = existingTokens.length + 101;
+    const existingSeqs = existingTokens
+      .map(t => {
+        const m = (t.token_number || '').match(/A-(\d+)/);
+        return m ? parseInt(m[1], 10) : 100;
+      })
+      .filter(n => !isNaN(n));
+    const nextSeq = (existingSeqs.length > 0 ? Math.max(...existingSeqs) : 106) + 1;
     const tokenNumber = `A-${nextSeq}`;
     const tokenId = `t-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
     const nowIso = new Date().toISOString();
@@ -707,15 +710,18 @@ class HybridDatabaseService {
     const totalQty = procuredTokens.reduce((acc, t) => acc + t.quantity, 0);
     const totalPayout = procuredTokens.reduce((acc, t) => acc + t.payment_amount, 0);
     const centerAnalytics = allCenters.map(c => this.getCenterAnalytics(c.center_id)!);
+    const avgWait = centerAnalytics.length > 0
+      ? Number((centerAnalytics.reduce((acc, c) => acc + (c.avg_wait_time_minutes || 0), 0) / centerAnalytics.length).toFixed(1))
+      : 15;
 
     return {
       total_centers: allCenters.length,
       active_centers: allCenters.filter(c => c.operational_status !== 'Full').length,
-      total_farmers_served_today: procuredTokens.length + 18,
-      total_procurement_quintals: totalQty + 420,
-      total_disbursed_inr: totalPayout + 950000,
-      overall_avg_wait_time_min: 24,
-      system_efficiency_score: 96.4,
+      total_farmers_served_today: procuredTokens.length,
+      total_procurement_quintals: totalQty,
+      total_disbursed_inr: totalPayout,
+      overall_avg_wait_time_min: avgWait,
+      system_efficiency_score: Number(Math.min(100, Math.max(60, 100 - (avgWait > 20 ? (avgWait - 20) : 0))).toFixed(1)),
       center_performance: centerAnalytics
     };
   }

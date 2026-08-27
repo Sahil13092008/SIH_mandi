@@ -4,26 +4,62 @@ import { createServer as createViteServer } from 'vite';
 import { db } from './server/db';
 import { smsService } from './server/smsService';
 import { MSP_DATA } from './src/utils/translations';
+import { CreateTokenSchema, FarmerProfileSchema, AdvanceStatusSchema } from './src/utils/validation';
 
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
+  // CORS Policy (C-4)
+  const ALLOWED_ORIGINS = [
+    'https://sih-mandi.sisodesahil60.workers.dev',
+    'http://localhost:3000',
+    'http://localhost:5173'
+  ];
+
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (origin && ALLOWED_ORIGINS.includes(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+    } else {
+      res.setHeader('Access-Control-Allow-Origin', 'https://sih-mandi.sisodesahil60.workers.dev');
+    }
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-demo-secret');
+    if (req.method === 'OPTIONS') {
+      return res.sendStatus(204);
+    }
+    next();
+  });
+
   app.use(express.json());
 
-  // SSE Clients for real-time live synchronization
-  const sseClients: express.Response[] = [];
+  // SSE Clients for real-time live synchronization (M-8: Heartbeat & leak prevention)
+  let sseClients: express.Response[] = [];
 
   function broadcastEvent(type: string, data: any) {
     const payload = `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
-    sseClients.forEach(res => {
+    sseClients = sseClients.filter(res => {
       try {
         res.write(payload);
+        return true;
       } catch (err) {
-        // client disconnected
+        return false;
       }
     });
   }
+
+  // Periodic SSE Heartbeat to purge dead sockets (M-8)
+  const heartbeatTimer = setInterval(() => {
+    sseClients = sseClients.filter(res => {
+      try {
+        res.write(':keepalive\n\n');
+        return true;
+      } catch (err) {
+        return false;
+      }
+    });
+  }, 20000);
 
   // Hook into SMS service broadcasts to send SSE
   smsService.subscribe(newSms => {
@@ -43,10 +79,7 @@ async function startServer() {
     res.write(`event: connected\ndata: ${JSON.stringify({ message: 'Connected to Mandi Queue Live Stream' })}\n\n`);
 
     req.on('close', () => {
-      const index = sseClients.indexOf(res);
-      if (index !== -1) {
-        sseClients.splice(index, 1);
-      }
+      sseClients = sseClients.filter(c => c !== res);
     });
   });
 
@@ -70,10 +103,11 @@ async function startServer() {
 
   // 2. Farmers API
   app.post('/api/farmers/register', (req, res) => {
-    const { name, phone, village, district } = req.body;
-    if (!phone) {
-      return res.status(400).json({ error: 'Phone number is required' });
+    const parseResult = FarmerProfileSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({ error: 'Validation failed', details: parseResult.error.flatten() });
     }
+    const { name, phone, village, district, aadhaar_last4, bank_account_last4, is_aadhaar_verified } = parseResult.data;
 
     // Check if farmer exists by phone
     let farmer = Array.from(db.farmers.values()).find(f => f.phone === phone);
@@ -85,16 +119,20 @@ async function startServer() {
         phone,
         village: village || 'Local Gram',
         district: district || 'Indore',
-        aadhaar_last4: Math.floor(1000 + Math.random() * 9000).toString(),
-        bank_account_last4: Math.floor(1000 + Math.random() * 9000).toString(),
+        aadhaar_last4: aadhaar_last4 || Math.floor(1000 + Math.random() * 9000).toString(),
+        bank_account_last4: bank_account_last4 || Math.floor(1000 + Math.random() * 9000).toString(),
+        is_aadhaar_verified: is_aadhaar_verified ?? true,
         created_at: new Date().toISOString()
       };
       db.farmers.set(farmer_id, farmer);
-    } else if (name || village) {
+    } else {
       // Update info if provided
       if (name) farmer.name = name;
       if (village) farmer.village = village;
       if (district) farmer.district = district;
+      if (aadhaar_last4) farmer.aadhaar_last4 = aadhaar_last4;
+      if (bank_account_last4) farmer.bank_account_last4 = bank_account_last4;
+      if (is_aadhaar_verified !== undefined) farmer.is_aadhaar_verified = is_aadhaar_verified;
     }
 
     res.json(farmer);
@@ -102,7 +140,11 @@ async function startServer() {
 
   app.patch('/api/farmers/:id', (req, res) => {
     const farmerId = req.params.id;
-    const updated = db.updateFarmer(farmerId, req.body);
+    const parseResult = FarmerProfileSchema.partial().safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({ error: 'Invalid update payload', details: parseResult.error.flatten() });
+    }
+    const updated = db.updateFarmer(farmerId, parseResult.data);
     if (!updated) {
       return res.status(404).json({ error: 'Farmer profile not found' });
     }
@@ -112,6 +154,9 @@ async function startServer() {
 
   app.get('/api/farmers/:phone/tokens', (req, res) => {
     const phone = req.params.phone;
+    if (!/^[6-9]\d{9}$/.test(phone)) {
+      return res.status(400).json({ error: 'Invalid phone format' });
+    }
     const farmerTokens = Array.from(db.tokens.values())
       .filter(t => t.farmer_phone === phone)
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
@@ -120,6 +165,11 @@ async function startServer() {
 
   // 3. Tokens API
   app.post('/api/tokens', (req, res) => {
+    const parseResult = CreateTokenSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({ error: 'Token creation validation failed', details: parseResult.error.flatten() });
+    }
+
     const {
       farmer_id,
       farmer_name,
@@ -128,13 +178,8 @@ async function startServer() {
       crop,
       quantity,
       center_id,
-      preferred_slot,
-      msp_rate
-    } = req.body;
-
-    if (!farmer_phone || !crop || !quantity || !center_id) {
-      return res.status(400).json({ error: 'Missing required token fields (farmer_phone, crop, quantity, center_id)' });
-    }
+      preferred_slot
+    } = parseResult.data;
 
     // Ensure farmer profile exists
     let farmer = db.farmers.get(farmer_id);
@@ -155,8 +200,8 @@ async function startServer() {
       db.farmers.set(fId, farmer);
     }
 
-    // Determine MSP rate if not supplied
-    const officialRate = msp_rate || MSP_DATA[crop]?.rate || 2275;
+    // Force official MSP rate - client-sent rate is never blindly trusted (H-7)
+    const officialRate = (MSP_DATA as any)[crop]?.rate || 2275;
 
     const token = db.createToken({
       farmer_id: farmer.farmer_id,
@@ -185,11 +230,12 @@ async function startServer() {
   });
 
   app.patch('/api/tokens/:id/status', (req, res) => {
-    const { status, quality_check_result, note } = req.body;
-    if (!status) {
-      return res.status(400).json({ error: 'Status is required' });
+    const parseResult = AdvanceStatusSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({ error: 'Invalid status update payload', details: parseResult.error.flatten() });
     }
 
+    const { status, quality_check_result, note } = parseResult.data;
     const updated = db.updateTokenStatus(req.params.id, status, quality_check_result, note);
     if (!updated) {
       return res.status(404).json({ error: 'Token not found' });
@@ -202,7 +248,7 @@ async function startServer() {
   });
 
   app.post('/api/tokens/:id/payment-webhook', (req, res) => {
-    const { reference_id } = req.body;
+    const reference_id = req.body.reference_id || `UPI-DBT-${Math.floor(1000000000 + Math.random() * 9000000000)}`;
     const updated = db.processPaymentWebhook(req.params.id, reference_id);
     if (!updated) {
       return res.status(404).json({ error: 'Token not found' });
