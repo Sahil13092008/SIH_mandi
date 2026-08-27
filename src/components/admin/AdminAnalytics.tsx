@@ -188,7 +188,7 @@ export const AdminAnalytics: React.FC = () => {
                       ₹{c.total_payout_inr.toLocaleString('en-IN')}
                     </td>
                     <td className="py-3 px-3 font-mono">
-                      {c.avg_wait_time_minutes} min
+                      {Number(c.avg_wait_time_minutes).toFixed(2)} min
                     </td>
                     <td className="py-3 px-3 font-mono text-stone-600">
                       {c.no_show_rate}%

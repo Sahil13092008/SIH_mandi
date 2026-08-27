@@ -300,7 +300,7 @@ export const getFallbackOverview = (): MinistryOverview => {
       procured_tokens_today: centerProcured.length,
       total_quantity_procured: centerQty,
       total_payout_inr: centerPayout,
-      avg_wait_time_minutes: c.avg_service_time_min * 2.2,
+      avg_wait_time_minutes: Number((c.avg_service_time_min * 2.2).toFixed(2)),
       no_show_rate: 3.5,
       capacity_utilization: Math.min(100, Math.round((centerQty / c.daily_capacity) * 100)),
       crop_breakdown: [
