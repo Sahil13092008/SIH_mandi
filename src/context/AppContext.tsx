@@ -198,8 +198,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setAllTokens(prev => {
             const map = new Map<string, Token>();
             prev.forEach(t => map.set(t.token_id, t));
-            remoteTokens.forEach(t => map.set(t.token_id, t));
-            return Array.from(map.values());
+            remoteTokens.forEach(remote => {
+              const local = map.get(remote.token_id);
+              if (!local || new Date(remote.updated_at).getTime() >= new Date(local.updated_at || local.created_at).getTime()) {
+                map.set(remote.token_id, remote);
+              }
+            });
+            return Array.from(map.values()).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
           });
           setLastUpdated(new Date());
         }
