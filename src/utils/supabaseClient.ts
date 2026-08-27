@@ -67,13 +67,32 @@ export const syncTokenToSupabase = async (token: Partial<Token>): Promise<boolea
       created_at: token.created_at,
       updated_at: token.updated_at
     };
-    const { error } = await supabaseClient.from('tokens').upsert(payload, { onConflict: 'token_id' });
-    if (error) {
-      console.error('[Supabase Upsert Error]', error.message, error.details, error.hint);
+
+    // 1. Try direct UPDATE first to strictly trigger UPDATE policy (avoids Postgres UPSERT INSERT policy conflict)
+    const { data: updatedData, error: updateError } = await supabaseClient
+      .from('tokens')
+      .update(payload)
+      .eq('token_id', token.token_id)
+      .select('token_id');
+
+    if (!updateError && updatedData && updatedData.length > 0) {
+      if (import.meta.env?.DEV) {
+        console.log(`[Supabase Update Success] Token ${token.token_number} (${token.status}) updated in cloud.`);
+      }
+      return true;
+    }
+
+    // 2. If row didn't exist yet (new lot creation or initial seed), perform UPSERT/INSERT
+    const { error: insertError } = await supabaseClient
+      .from('tokens')
+      .upsert(payload, { onConflict: 'token_id' });
+
+    if (insertError) {
+      console.error('[Supabase Sync Error]', insertError.message, insertError.details, insertError.hint);
       return false;
     } else {
       if (import.meta.env?.DEV) {
-        console.log(`[Supabase Sync Success] Token ${token.token_number} (${token.status}) synced to cloud DB.`);
+        console.log(`[Supabase Sync Success] Token ${token.token_number} (${token.status}) synced to cloud.`);
       }
       return true;
     }
