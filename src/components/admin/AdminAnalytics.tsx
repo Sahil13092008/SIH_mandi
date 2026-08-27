@@ -23,22 +23,21 @@ export const AdminAnalytics: React.FC = () => {
   const [selectedCenterFilter, setSelectedCenterFilter] = useState('ALL');
 
   const fetchOverview = async () => {
+    setLoading(true);
     try {
-      setLoading(true);
       const res = await fetch('/api/analytics/overview');
       if (res.ok) {
         const data = await res.json();
         setOverview(data);
+        setLoading(false);
         return;
       }
     } catch (err) {
       console.warn('API overview fetch failed, using telemetry fallback data:', err);
-    } finally {
-      setLoading(false);
     }
-    // Fallback overview calculation so UI never gets stuck loading!
     setOverview(getFallbackOverview());
-  };
+    setLoading(false);
+};
 
   useEffect(() => {
     fetchOverview();
