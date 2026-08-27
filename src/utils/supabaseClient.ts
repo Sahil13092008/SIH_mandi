@@ -1,8 +1,15 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { Token } from '../types';
 
-const SUPABASE_URL: string = import.meta.env?.VITE_SUPABASE_URL || '';
-const SUPABASE_ANON_KEY: string = import.meta.env?.VITE_SUPABASE_ANON_KEY || '';
+const SUPABASE_URL: string = 
+  (import.meta.env?.VITE_SUPABASE_URL as string) || 
+  (import.meta.env?.SUPABASE_URL as string) || 
+  '';
+
+const SUPABASE_ANON_KEY: string = 
+  (import.meta.env?.VITE_SUPABASE_ANON_KEY as string) || 
+  (import.meta.env?.SUPABASE_ANON_KEY as string) || 
+  '';
 
 export const isSupabaseConfigured = (): boolean => {
   return Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
