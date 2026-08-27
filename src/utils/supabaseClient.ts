@@ -28,10 +28,11 @@ export const syncTokenToSupabase = async (token: any) => {
       token_number: token.token_number,
       queue_position: token.queue_position,
       status: token.status,
-      quality_check_result: token.quality_check_result ? JSON.stringify(token.quality_check_result) : null,
+      quality_check_result: token.quality_check_result ? (typeof token.quality_check_result === 'string' ? token.quality_check_result : JSON.stringify(token.quality_check_result)) : null,
       payment_amount: token.payment_amount,
       payment_reference: token.payment_reference || null,
       payment_confirmed_at: token.payment_confirmed_at || null,
+      status_history: token.status_history ? (typeof token.status_history === 'string' ? token.status_history : JSON.stringify(token.status_history)) : null,
       created_at: token.created_at,
       updated_at: token.updated_at
     };

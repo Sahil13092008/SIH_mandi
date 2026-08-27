@@ -143,30 +143,100 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e) {}
   }, [smsLogs]);
 
-  // Initial Sync from Supabase if table exists
+  // Keep derived states in sync automatically
+  useEffect(() => {
+    if (selectedCenterId) {
+      setCenterQueue(allTokens.filter(t => t.center_id === selectedCenterId));
+    }
+  }, [allTokens, selectedCenterId]);
+
+  useEffect(() => {
+    if (currentFarmer?.phone) {
+      const tokens = allTokens.filter(t => t.farmer_phone === currentFarmer.phone);
+      setFarmerTokens(tokens);
+      if (activeToken) {
+        const match = tokens.find(t => t.token_id === activeToken.token_id);
+        if (match) setActiveToken(match);
+      } else if (tokens.length > 0) {
+        setActiveToken(tokens[0]);
+      }
+    }
+  }, [allTokens, currentFarmer?.phone]);
+
+  // Instant Cross-Tab Sync via Storage Event
+  useEffect(() => {
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === 'mandi_all_tokens' && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setAllTokens(parsed);
+            setLastUpdated(new Date());
+          }
+        } catch (err) {}
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, []);
+
+  // Supabase Initial Sync & High-Frequency Cross-Device Sync (3s Polling + Realtime WebSockets)
   useEffect(() => {
     if (!supabaseClient) return;
+
+    const parseRemote = (d: any): Token => ({
+      ...d,
+      quality_check_result: typeof d.quality_check_result === 'string' ? JSON.parse(d.quality_check_result) : d.quality_check_result,
+      status_history: typeof d.status_history === 'string' ? JSON.parse(d.status_history) : (d.status_history || [])
+    });
+
     const loadSupabaseTokens = async () => {
       try {
-        const { data, error } = await supabaseClient.from('tokens').select('*');
+        const { data, error } = await supabaseClient.from('tokens').select('*').order('created_at', { ascending: false });
         if (!error && Array.isArray(data) && data.length > 0) {
-          const remoteTokens: Token[] = data.map((d: any) => ({
-            ...d,
-            quality_check_result: typeof d.quality_check_result === 'string' ? JSON.parse(d.quality_check_result) : d.quality_check_result,
-            status_history: typeof d.status_history === 'string' ? JSON.parse(d.status_history) : (d.status_history || [])
-          }));
+          const remoteTokens: Token[] = data.map(parseRemote);
           setAllTokens(prev => {
             const map = new Map<string, Token>();
             prev.forEach(t => map.set(t.token_id, t));
             remoteTokens.forEach(t => map.set(t.token_id, t));
             return Array.from(map.values());
           });
+          setLastUpdated(new Date());
         }
       } catch (err) {
         console.warn('[Supabase Fetch] Error loading tokens:', err);
       }
     };
+
     loadSupabaseTokens();
+
+    // 1-Second High Frequency Sync Loop for Cross-Device Phone <-> Laptop
+    const interval = setInterval(loadSupabaseTokens, 1500);
+
+    // Supabase Realtime WebSocket Listener for Immediate Push
+    const channel = supabaseClient
+      .channel('realtime:tokens')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tokens' }, payload => {
+        const newRecord = payload.new as any;
+        if (newRecord && newRecord.token_id) {
+          const formatted = parseRemote(newRecord);
+          setAllTokens(prev => {
+            const exists = prev.some(t => t.token_id === formatted.token_id);
+            if (exists) {
+              return prev.map(t => t.token_id === formatted.token_id ? formatted : t);
+            } else {
+              return [formatted, ...prev];
+            }
+          });
+          setLastUpdated(new Date());
+        }
+      })
+      .subscribe();
+
+    return () => {
+      clearInterval(interval);
+      supabaseClient.removeChannel(channel);
+    };
   }, []);
 
   // Fetch Centers
