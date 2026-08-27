@@ -193,20 +193,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const loadSupabaseTokens = async () => {
       try {
         const { data, error } = await supabaseClient.from('tokens').select('*').order('created_at', { ascending: false });
-        if (!error && Array.isArray(data) && data.length > 0) {
-          const remoteTokens: Token[] = data.map(parseRemote);
-          setAllTokens(prev => {
-            const map = new Map<string, Token>();
-            prev.forEach(t => map.set(t.token_id, t));
-            remoteTokens.forEach(remote => {
-              const local = map.get(remote.token_id);
-              if (!local || new Date(remote.updated_at).getTime() >= new Date(local.updated_at || local.created_at).getTime()) {
-                map.set(remote.token_id, remote);
-              }
+        if (!error && Array.isArray(data)) {
+          if (data.length === 0) {
+            // Auto-seed initial tokens to Supabase DB
+            allTokens.forEach(t => syncTokenToSupabase(t));
+          } else {
+            const remoteTokens: Token[] = data.map(parseRemote);
+            setAllTokens(prev => {
+              const map = new Map<string, Token>();
+              prev.forEach(t => map.set(t.token_id, t));
+              remoteTokens.forEach(remote => {
+                const local = map.get(remote.token_id);
+                if (!local || new Date(remote.updated_at).getTime() >= new Date(local.updated_at || local.created_at).getTime()) {
+                  map.set(remote.token_id, remote);
+                }
+              });
+              return Array.from(map.values()).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
             });
-            return Array.from(map.values()).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-          });
-          setLastUpdated(new Date());
+            setLastUpdated(new Date());
+          }
         }
       } catch (err) {
         console.warn('[Supabase Fetch] Error loading tokens:', err);
