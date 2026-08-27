@@ -56,43 +56,118 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
+import { supabaseClient, syncTokenToSupabase } from '../utils/supabaseClient';
+
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [role, setRole] = useState<AppRole>('farmer');
   const [language, setLanguage] = useState<AppLanguage>('en');
   const [centers, setCenters] = useState<Center[]>(FALLBACK_CENTERS);
   const [selectedCenterId, setSelectedCenterId] = useState<string>('c-rau');
+  
+  // Default Ramesh with localStorage persistence
+  const [currentFarmer, setCurrentFarmer] = useState<Farmer | null>(() => {
+    try {
+      const saved = localStorage.getItem('mandi_current_farmer');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return {
+      farmer_id: 'f-ramesh',
+      name: 'Ramesh Kumar',
+      phone: '9876543210',
+      village: 'Rau Village',
+      district: 'Indore',
+      aadhaar_last4: '7821',
+      aadhaar_number: '7821 4509 1234',
+      bank_account_last4: '4509',
+      is_aadhaar_verified: true,
+      created_at: new Date().toISOString()
+    };
+  });
+
+  // Persistent Tokens State across sessions & devices
+  const [allTokens, setAllTokens] = useState<Token[]>(() => {
+    try {
+      const saved = localStorage.getItem('mandi_all_tokens');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {}
+    return FALLBACK_TOKENS;
+  });
+
   const [centerQueue, setCenterQueue] = useState<Token[]>(
     FALLBACK_TOKENS.filter(t => t.center_id === 'c-rau')
   );
-  
-  // Default Ramesh
-  const [currentFarmer, setCurrentFarmer] = useState<Farmer | null>({
-    farmer_id: 'f-ramesh',
-    name: 'Ramesh Kumar',
-    phone: '9876543210',
-    village: 'Rau Village',
-    district: 'Indore',
-    aadhaar_last4: '7821',
-    aadhaar_number: '7821 4509 1234',
-    bank_account_last4: '4509',
-    is_aadhaar_verified: true,
-    created_at: new Date().toISOString()
-  });
 
-  const [allTokens, setAllTokens] = useState<Token[]>(FALLBACK_TOKENS);
   const [activeToken, setActiveToken] = useState<Token | null>(
-    FALLBACK_TOKENS.find(t => t.token_id === 't-104') || FALLBACK_TOKENS[0]
+    allTokens.find(t => t.token_id === 't-104') || allTokens[0]
   );
   const [farmerTokens, setFarmerTokens] = useState<Token[]>(
-    FALLBACK_TOKENS.filter(t => t.farmer_phone === '9876543210')
+    allTokens.filter(t => t.farmer_phone === '9876543210')
   );
-  const [smsLogs, setSmsLogs] = useState<SMSLog[]>(FALLBACK_SMS_LOGS);
+  const [smsLogs, setSmsLogs] = useState<SMSLog[]>(() => {
+    try {
+      const saved = localStorage.getItem('mandi_sms_logs');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {}
+    return FALLBACK_SMS_LOGS;
+  });
   const [newSmsAlert, setNewSmsAlert] = useState<SMSLog | null>(null);
   const [isConnected, setIsConnected] = useState<boolean>(true);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
   const [voiceEnabled, setVoiceEnabled] = useState<boolean>(false);
 
   const t = translations[language];
+
+  // Auto-save state changes to LocalStorage & Sync Supabase DB on mount
+  useEffect(() => {
+    try {
+      localStorage.setItem('mandi_all_tokens', JSON.stringify(allTokens));
+    } catch (e) {}
+  }, [allTokens]);
+
+  useEffect(() => {
+    try {
+      if (currentFarmer) localStorage.setItem('mandi_current_farmer', JSON.stringify(currentFarmer));
+      else localStorage.removeItem('mandi_current_farmer');
+    } catch (e) {}
+  }, [currentFarmer]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('mandi_sms_logs', JSON.stringify(smsLogs));
+    } catch (e) {}
+  }, [smsLogs]);
+
+  // Initial Sync from Supabase if table exists
+  useEffect(() => {
+    if (!supabaseClient) return;
+    const loadSupabaseTokens = async () => {
+      try {
+        const { data, error } = await supabaseClient.from('tokens').select('*');
+        if (!error && Array.isArray(data) && data.length > 0) {
+          const remoteTokens: Token[] = data.map((d: any) => ({
+            ...d,
+            quality_check_result: typeof d.quality_check_result === 'string' ? JSON.parse(d.quality_check_result) : d.quality_check_result,
+            status_history: typeof d.status_history === 'string' ? JSON.parse(d.status_history) : (d.status_history || [])
+          }));
+          setAllTokens(prev => {
+            const map = new Map<string, Token>();
+            prev.forEach(t => map.set(t.token_id, t));
+            remoteTokens.forEach(t => map.set(t.token_id, t));
+            return Array.from(map.values());
+          });
+        }
+      } catch (err) {
+        console.warn('[Supabase Fetch] Error loading tokens:', err);
+      }
+    };
+    loadSupabaseTokens();
+  }, []);
 
   // Fetch Centers
   const fetchCenters = useCallback(async () => {
@@ -307,6 +382,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setActiveToken(newToken);
     setCenterQueue(prev => [newToken, ...prev]);
     setFarmerTokens(prev => [newToken, ...prev]);
+    
+    // Async Live Database Sync
+    syncTokenToSupabase(newToken);
 
     const createSms: SMSLog = {
       id: `sms-${Date.now()}`,
@@ -377,6 +455,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCenterQueue(prev => prev.map(t => t.token_id === tokenId ? updatedToken : t));
     setFarmerTokens(prev => prev.map(t => t.token_id === tokenId ? updatedToken : t));
     if (activeToken?.token_id === tokenId) setActiveToken(updatedToken);
+
+    // Async Live Database Sync
+    syncTokenToSupabase(updatedToken);
 
     let eventName: SMSLog['trigger_event'] = 'QUEUE_ADVANCED';
     let msgEn = `[e-MANDI ALERT] Token ${updatedToken.token_number} status updated to ${finalStatus}.`;
@@ -454,6 +535,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setCenterQueue(prev => prev.map(t => t.token_id === tokenId ? updatedToken : t));
       setFarmerTokens(prev => prev.map(t => t.token_id === tokenId ? updatedToken : t));
       if (activeToken?.token_id === tokenId) setActiveToken(updatedToken);
+
+      // Async Live Database Sync
+      syncTokenToSupabase(updatedToken);
 
       const paymentSms: SMSLog = {
         id: `sms-${Date.now()}`,
