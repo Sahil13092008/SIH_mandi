@@ -1,0 +1,6 @@
+{
+  "name": "Mandi Queue - Digital Token & Queue Management",
+  "description": "Digital token and queue management system for agricultural procurement centers (mandis) in India with live queue tracking, SMS simulation, staff workflow, and ministry analytics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
