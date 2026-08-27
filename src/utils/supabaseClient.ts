@@ -1,15 +1,18 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { Token } from '../types';
 
+const DEFAULT_SUPABASE_URL = 'https://hfrzvhftrtvgcryyxmxx.supabase.co';
+const DEFAULT_SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhmcnp2aGZ0cnR2Z2NyeXl4bXh4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc4MDU4MjksImV4cCI6MjEwMzM4MTgyOX0.Egj_utV5g72kxQCAbwPkW_5QbIjAVD8nxU86bZ5V3jg';
+
 const SUPABASE_URL: string = 
   (import.meta.env?.VITE_SUPABASE_URL as string) || 
   (import.meta.env?.SUPABASE_URL as string) || 
-  '';
+  DEFAULT_SUPABASE_URL;
 
 const SUPABASE_ANON_KEY: string = 
   (import.meta.env?.VITE_SUPABASE_ANON_KEY as string) || 
   (import.meta.env?.SUPABASE_ANON_KEY as string) || 
-  '';
+  DEFAULT_SUPABASE_ANON_KEY;
 
 export const isSupabaseConfigured = (): boolean => {
   return Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
