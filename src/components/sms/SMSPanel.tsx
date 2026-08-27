@@ -25,7 +25,12 @@ export const SMSPanel: React.FC = () => {
   });
 
   const handleClearLogs = async () => {
-    await fetch('/api/sms-log', { method: 'DELETE' });
+    try {
+      if (typeof window !== 'undefined' && import.meta.env.DEV && window.location.port === '3000') {
+        await fetch('/api/sms-log', { method: 'DELETE' });
+      }
+    } catch (e) {}
+    localStorage.removeItem('mandi_sms_logs');
     await refreshSmsLogs();
   };
 
