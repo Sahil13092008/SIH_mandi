@@ -10,11 +10,6 @@ export const isSupabaseConfigured = (): boolean => {
   return Boolean(
     supabaseUrl && 
     supabaseKey && 
-    supabaseUrl !== 'https://hfrzvhftrtvgcryyxmxx.supabase.co' && 
-    supabaseKey !== 'YOUR_SUPABASE_ANON_KEY'
-  ) || Boolean(
-    supabaseUrl && 
-    supabaseKey && 
     !supabaseUrl.includes('YOUR_') && 
     !supabaseKey.includes('YOUR_')
   );
