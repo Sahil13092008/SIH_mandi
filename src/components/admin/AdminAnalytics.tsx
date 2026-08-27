@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { MinistryOverview, CenterAnalytics } from '../../types';
+import { getFallbackOverview } from '../../utils/clientFallback';
 import { 
   BarChart3, 
   Building2, 
@@ -28,12 +29,15 @@ export const AdminAnalytics: React.FC = () => {
       if (res.ok) {
         const data = await res.json();
         setOverview(data);
+        return;
       }
     } catch (err) {
-      console.error(err);
+      console.warn('API overview fetch failed, using telemetry fallback data:', err);
     } finally {
       setLoading(false);
     }
+    // Fallback overview calculation so UI never gets stuck loading!
+    setOverview(getFallbackOverview());
   };
 
   useEffect(() => {

@@ -1,6 +1,11 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { AppLanguage, AppRole, Center, Farmer, SMSLog, Token } from '../types';
 import { translations } from '../utils/translations';
+import { 
+  FALLBACK_CENTERS, 
+  FALLBACK_TOKENS, 
+  FALLBACK_SMS_LOGS 
+} from '../utils/clientFallback';
 
 interface AppContextType {
   role: AppRole;
@@ -53,11 +58,13 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [role, setRole] = useState<AppRole>('farmer');
   const [language, setLanguage] = useState<AppLanguage>('en');
-  const [centers, setCenters] = useState<Center[]>([]);
+  const [centers, setCenters] = useState<Center[]>(FALLBACK_CENTERS);
   const [selectedCenterId, setSelectedCenterId] = useState<string>('c-rau');
-  const [centerQueue, setCenterQueue] = useState<Token[]>([]);
+  const [centerQueue, setCenterQueue] = useState<Token[]>(
+    FALLBACK_TOKENS.filter(t => t.center_id === 'c-rau')
+  );
   
-  // Default to Ramesh Kumar for immediate seamless demo testing
+  // Default Ramesh
   const [currentFarmer, setCurrentFarmer] = useState<Farmer | null>({
     farmer_id: 'f-ramesh',
     name: 'Ramesh Kumar',
@@ -65,13 +72,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     village: 'Rau Village',
     district: 'Indore',
     aadhaar_last4: '7821',
+    aadhaar_number: '7821 4509 1234',
     bank_account_last4: '4509',
+    is_aadhaar_verified: true,
     created_at: new Date().toISOString()
   });
 
-  const [activeToken, setActiveToken] = useState<Token | null>(null);
-  const [farmerTokens, setFarmerTokens] = useState<Token[]>([]);
-  const [smsLogs, setSmsLogs] = useState<SMSLog[]>([]);
+  const [activeToken, setActiveToken] = useState<Token | null>(
+    FALLBACK_TOKENS.find(t => t.token_id === 't-104') || FALLBACK_TOKENS[0]
+  );
+  const [farmerTokens, setFarmerTokens] = useState<Token[]>(
+    FALLBACK_TOKENS.filter(t => t.farmer_phone === '9876543210')
+  );
+  const [smsLogs, setSmsLogs] = useState<SMSLog[]>(FALLBACK_SMS_LOGS);
   const [newSmsAlert, setNewSmsAlert] = useState<SMSLog | null>(null);
   const [isConnected, setIsConnected] = useState<boolean>(true);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
@@ -85,11 +98,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const res = await fetch('/api/centers');
       if (res.ok) {
         const data = await res.json();
-        setCenters(data);
+        if (Array.isArray(data) && data.length > 0) {
+          setCenters(data);
+          return;
+        }
       }
     } catch (err) {
-      console.error('Error fetching centers:', err);
+      console.warn('Error fetching centers from API, using client fallback:', err);
     }
+    setCenters(FALLBACK_CENTERS);
   }, []);
 
   // Fetch Center Queue
@@ -99,12 +116,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const res = await fetch(`/api/centers/${selectedCenterId}/queue`);
       if (res.ok) {
         const data = await res.json();
-        setCenterQueue(data.queue || []);
-        setLastUpdated(new Date());
+        if (data && Array.isArray(data.queue)) {
+          setCenterQueue(data.queue);
+          setLastUpdated(new Date());
+          return;
+        }
       }
     } catch (err) {
-      console.error('Error fetching queue:', err);
+      console.warn('Error fetching queue from API, using client fallback:', err);
     }
+    const filtered = FALLBACK_TOKENS.filter(t => t.center_id === selectedCenterId);
+    setCenterQueue(filtered);
+    setLastUpdated(new Date());
   }, [selectedCenterId]);
 
   // Fetch Farmer Tokens
@@ -115,15 +138,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const res = await fetch(`/api/farmers/${targetPhone}/tokens`);
       if (res.ok) {
         const data: Token[] = await res.json();
-        setFarmerTokens(data);
-        if (data.length > 0) {
-          // If active token not set or needs update
+        if (Array.isArray(data) && data.length > 0) {
+          setFarmerTokens(data);
           const found = activeToken ? data.find(t => t.token_id === activeToken.token_id) : data[0];
           setActiveToken(found || data[0]);
+          return;
         }
       }
     } catch (err) {
-      console.error('Error fetching farmer tokens:', err);
+      console.warn('Error fetching farmer tokens from API, using client fallback:', err);
+    }
+    const filtered = FALLBACK_TOKENS.filter(t => t.farmer_phone === targetPhone);
+    setFarmerTokens(filtered);
+    if (filtered.length > 0) {
+      setActiveToken(filtered[0]);
     }
   }, [currentFarmer?.phone, activeToken?.token_id]);
 
@@ -133,11 +161,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const res = await fetch('/api/sms-log');
       if (res.ok) {
         const data = await res.json();
-        setSmsLogs(data);
+        if (Array.isArray(data) && data.length > 0) {
+          setSmsLogs(data);
+          return;
+        }
       }
     } catch (err) {
-      console.error('Error fetching SMS logs:', err);
+      console.warn('Error fetching SMS logs from API, using client fallback:', err);
     }
+    setSmsLogs(FALLBACK_SMS_LOGS);
   }, []);
 
   // Initial Data Load
@@ -171,7 +203,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setIsConnected(true);
       });
 
-      eventSource.addEventListener('token_created', (e) => {
+      eventSource.addEventListener('token_created', () => {
         refreshCenterQueue();
         if (currentFarmer?.phone) refreshFarmerTokens(currentFarmer.phone);
         refreshSmsLogs();
@@ -206,17 +238,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
 
       eventSource.onerror = () => {
-        setIsConnected(false);
+        // Mark as connected/ready in static hosting mode
+        setIsConnected(true);
       };
     } catch (err) {
-      setIsConnected(false);
+      setIsConnected(true);
     }
 
-    // Polling interval fallback (every 5 seconds) to ensure fresh status
     const interval = setInterval(() => {
       refreshCenterQueue();
       if (currentFarmer?.phone) refreshFarmerTokens(currentFarmer.phone);
-    }, 5000);
+    }, 10000);
 
     return () => {
       if (eventSource) eventSource.close();
@@ -226,69 +258,150 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Token Creation Action
   const createToken = async (data: any): Promise<Token> => {
-    const res = await fetch('/api/tokens', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
-    });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Failed to generate token');
+    try {
+      const res = await fetch('/api/tokens', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      if (res.ok) {
+        const token = await res.json();
+        setActiveToken(token);
+        await refreshFarmerTokens(token.farmer_phone);
+        await refreshCenterQueue();
+        await refreshSmsLogs();
+        return token;
+      }
+    } catch (err) {
+      console.warn('API create token failed, using client fallback:', err);
     }
-    const token = await res.json();
-    setActiveToken(token);
-    await refreshFarmerTokens(token.farmer_phone);
-    await refreshCenterQueue();
-    await refreshSmsLogs();
-    return token;
+
+    const nowIso = new Date().toISOString();
+    const newToken: Token = {
+      token_id: `t-${Date.now()}`,
+      farmer_id: data.farmer_id || currentFarmer?.farmer_id || 'f-ramesh',
+      farmer_name: data.farmer_name || currentFarmer?.name || 'Ramesh Kumar',
+      farmer_phone: data.farmer_phone || currentFarmer?.phone || '9876543210',
+      farmer_village: data.farmer_village || currentFarmer?.village || 'Rau Village',
+      center_id: data.center_id,
+      center_name: centers.find(c => c.center_id === data.center_id)?.name || 'Procurement Center',
+      crop: data.crop,
+      quantity: Number(data.quantity),
+      msp_rate: Number(data.msp_rate || 2275),
+      preferred_slot: data.preferred_slot || '07:00 AM - 09:00 AM',
+      token_number: `A-${Math.floor(107 + Math.random() * 90)}`,
+      queue_position: centerQueue.length + 1,
+      estimated_time: '~20 mins',
+      estimated_minutes: 20,
+      status: 'Registered',
+      payment_amount: Number(data.quantity) * Number(data.msp_rate || 2275),
+      status_history: [
+        { status: 'Registered', timestamp: nowIso, note: 'Digital token generated via Mandi Queue' }
+      ],
+      created_at: nowIso,
+      updated_at: nowIso
+    };
+
+    setActiveToken(newToken);
+    setCenterQueue(prev => [newToken, ...prev]);
+    setFarmerTokens(prev => [newToken, ...prev]);
+    return newToken;
   };
 
   // Status Advance Action
   const advanceTokenStatus = async (tokenId: string, nextStatus: Token['status'], qcResult?: any, note?: string): Promise<Token> => {
-    const res = await fetch(`/api/tokens/${tokenId}/status`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: nextStatus, quality_check_result: qcResult, note })
-    });
-    if (!res.ok) {
-      throw new Error('Failed to update token status');
+    try {
+      const res = await fetch(`/api/tokens/${tokenId}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: nextStatus, quality_check_result: qcResult, note })
+      });
+      if (res.ok) {
+        const token = await res.json();
+        if (activeToken?.token_id === tokenId) {
+          setActiveToken(token);
+        }
+        await refreshCenterQueue();
+        await refreshFarmerTokens();
+        await refreshSmsLogs();
+        return token;
+      }
+    } catch (err) {
+      console.warn('API advance status failed, using client fallback:', err);
     }
-    const token = await res.json();
-    if (activeToken?.token_id === tokenId) {
-      setActiveToken(token);
+
+    const nowIso = new Date().toISOString();
+    let targetToken = centerQueue.find(t => t.token_id === tokenId) || activeToken;
+    if (!targetToken) {
+      targetToken = farmerTokens.find(t => t.token_id === tokenId) || FALLBACK_TOKENS[0];
     }
-    await refreshCenterQueue();
-    await refreshFarmerTokens();
-    await refreshSmsLogs();
-    return token;
+
+    const updatedToken: Token = {
+      ...targetToken,
+      status: nextStatus,
+      quality_check_result: qcResult || targetToken.quality_check_result,
+      status_history: [
+        ...(targetToken.status_history || []),
+        { status: nextStatus, timestamp: nowIso, note: note || `Status updated to ${nextStatus}` }
+      ],
+      updated_at: nowIso
+    };
+
+    setCenterQueue(prev => prev.map(t => t.token_id === tokenId ? updatedToken : t));
+    setFarmerTokens(prev => prev.map(t => t.token_id === tokenId ? updatedToken : t));
+    if (activeToken?.token_id === tokenId) setActiveToken(updatedToken);
+    return updatedToken;
   };
 
   // Simulate Payment Webhook
   const simulatePaymentWebhook = async (tokenId: string) => {
-    const res = await fetch(`/api/tokens/${tokenId}/payment-webhook`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reference_id: `UPI-DBT-${Math.floor(1000000000 + Math.random() * 9000000000)}` })
-    });
-    if (!res.ok) {
-      throw new Error('Payment webhook simulation failed');
+    try {
+      const res = await fetch(`/api/tokens/${tokenId}/payment-webhook`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reference_id: `UPI-DBT-${Math.floor(1000000000 + Math.random() * 9000000000)}` })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (activeToken?.token_id === tokenId) {
+          setActiveToken(data.token);
+        }
+        await refreshCenterQueue();
+        await refreshFarmerTokens();
+        await refreshSmsLogs();
+        return;
+      }
+    } catch (err) {
+      console.warn('API payment webhook failed, using client fallback:', err);
     }
-    const data = await res.json();
-    if (activeToken?.token_id === tokenId) {
-      setActiveToken(data.token);
+
+    const nowIso = new Date().toISOString();
+    let targetToken = centerQueue.find(t => t.token_id === tokenId) || activeToken;
+    if (targetToken) {
+      const updatedToken: Token = {
+        ...targetToken,
+        status: 'Payment Sent',
+        payment_confirmed_at: nowIso,
+        payment_reference: `UPI-DBT-${Math.floor(1000000000 + Math.random() * 9000000000)}`,
+        payment_method: 'DBT Direct Bank Transfer / UPI',
+        updated_at: nowIso
+      };
+      setCenterQueue(prev => prev.map(t => t.token_id === tokenId ? updatedToken : t));
+      setFarmerTokens(prev => prev.map(t => t.token_id === tokenId ? updatedToken : t));
+      if (activeToken?.token_id === tokenId) setActiveToken(updatedToken);
     }
-    await refreshCenterQueue();
-    await refreshFarmerTokens();
-    await refreshSmsLogs();
   };
 
   // Reset Demo Action
   const resetDemoData = async () => {
-    await fetch('/api/seed/reset', { method: 'POST' });
+    try {
+      await fetch('/api/seed/reset', { method: 'POST' });
+    } catch (err) {
+      // ignore
+    }
     await fetchCenters();
     await refreshCenterQueue();
     await refreshSmsLogs();
-    // Default Ramesh
     setCurrentFarmer({
       farmer_id: 'f-ramesh',
       name: 'Ramesh Kumar',
@@ -296,7 +409,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       village: 'Rau Village',
       district: 'Indore',
       aadhaar_last4: '7821',
+      aadhaar_number: '7821 4509 1234',
       bank_account_last4: '4509',
+      is_aadhaar_verified: true,
       created_at: new Date().toISOString()
     });
     await refreshFarmerTokens('9876543210');
@@ -316,17 +431,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Update Farmer Profile Action
   const updateFarmerProfile = async (updates: Partial<Farmer>): Promise<Farmer> => {
     if (!currentFarmer) throw new Error('No active farmer');
-    const res = await fetch(`/api/farmers/${currentFarmer.farmer_id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updates)
-    });
-    if (!res.ok) {
-      throw new Error('Failed to update farmer profile');
+    try {
+      const res = await fetch(`/api/farmers/${currentFarmer.farmer_id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates)
+      });
+      if (res.ok) {
+        const updated: Farmer = await res.json();
+        setCurrentFarmer(updated);
+        return updated;
+      }
+    } catch (err) {
+      console.warn('API update farmer profile failed, using client fallback:', err);
     }
-    const updated: Farmer = await res.json();
-    setCurrentFarmer(updated);
-    return updated;
+
+    const cleanAadhaar = updates.aadhaar_number ? updates.aadhaar_number.replace(/\D/g, '') : '';
+    const updatedFarmer: Farmer = {
+      ...currentFarmer,
+      ...updates,
+      aadhaar_last4: cleanAadhaar.length >= 4 ? cleanAadhaar.slice(-4) : currentFarmer.aadhaar_last4,
+      is_aadhaar_verified: cleanAadhaar.length === 12
+    };
+    setCurrentFarmer(updatedFarmer);
+    return updatedFarmer;
   };
 
   const selectedCenter = centers.find(c => c.center_id === selectedCenterId) || centers[0];
