@@ -199,17 +199,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             allTokens.forEach(t => syncTokenToSupabase(t));
           } else {
             const remoteTokens: Token[] = data.map(parseRemote);
-            setAllTokens(prev => {
-              const map = new Map<string, Token>();
-              prev.forEach(t => map.set(t.token_id, t));
-              remoteTokens.forEach(remote => {
-                const local = map.get(remote.token_id);
-                if (!local || new Date(remote.updated_at).getTime() >= new Date(local.updated_at || local.created_at).getTime()) {
-                  map.set(remote.token_id, remote);
-                }
-              });
-              return Array.from(map.values()).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-            });
+            // Supabase Cloud Database is 100% authoritative for all multi-device sessions
+            setAllTokens(remoteTokens);
             setLastUpdated(new Date());
           }
         }
@@ -638,14 +629,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Reset Demo Action
   const resetDemoData = async () => {
     try {
-      await fetch('/api/seed/reset', { method: 'POST' });
+      localStorage.removeItem('mandi_all_tokens');
+      localStorage.removeItem('mandi_sms_logs');
+      localStorage.removeItem('mandi_current_farmer');
+      if (supabaseClient) {
+        await supabaseClient.from('tokens').delete().neq('token_id', '');
+        FALLBACK_TOKENS.forEach(t => syncTokenToSupabase(t));
+      }
     } catch (err) {
       // ignore
     }
     setAllTokens(FALLBACK_TOKENS);
-    await fetchCenters();
-    await refreshCenterQueue();
-    await refreshSmsLogs();
+    setSmsLogs(FALLBACK_SMS_LOGS);
     setCurrentFarmer({
       farmer_id: 'f-ramesh',
       name: 'Ramesh Kumar',
@@ -658,7 +653,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       is_aadhaar_verified: true,
       created_at: new Date().toISOString()
     });
-    await refreshFarmerTokens('9876543210');
   };
 
   // Text-To-Speech helper
