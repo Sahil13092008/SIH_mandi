@@ -2,8 +2,33 @@ import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Phone, ShieldCheck, ArrowRight, UserPlus, Check, Sparkles } from 'lucide-react';
 
+const DEFAULT_DEMO_ACCOUNTS = [
+  { name: 'Ramesh Kumar', phone: '9876543210', village: 'Rau Village', crop: 'Wheat' },
+  { name: 'Suresh Patel', phone: '9826012345', village: 'Rangwasa', crop: 'Soybean' },
+  { name: 'Rajesh Verma', phone: '9425098765', village: 'Sanwer', crop: 'Mustard' }
+];
+
+const loadSavedFarmers = () => {
+  try {
+    const raw = localStorage.getItem('mandi_farmers_registry');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const phoneSet = new Set(parsed.map((p: any) => p.phone));
+        const merged = [...parsed];
+        DEFAULT_DEMO_ACCOUNTS.forEach(d => {
+          if (!phoneSet.has(d.phone)) merged.push(d);
+        });
+        return merged;
+      }
+    }
+  } catch (e) {}
+  return DEFAULT_DEMO_ACCOUNTS;
+};
+
 export const FarmerLogin: React.FC<{ onLoggedIn: () => void }> = ({ onLoggedIn }) => {
   const { t, setCurrentFarmer, refreshFarmerTokens } = useApp();
+  const [demoAccounts, setDemoAccounts] = useState(loadSavedFarmers);
   const [phone, setPhone] = useState('9876543210');
   const [name, setName] = useState('Ramesh Kumar');
   const [village, setVillage] = useState('Rau Village');
@@ -12,13 +37,7 @@ export const FarmerLogin: React.FC<{ onLoggedIn: () => void }> = ({ onLoggedIn }
   const [isRegisterMode, setIsRegisterMode] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  const demoAccounts = [
-    { name: 'Ramesh Kumar', phone: '9876543210', village: 'Rau Village', crop: 'Wheat' },
-    { name: 'Suresh Patel', phone: '9826012345', village: 'Rangwasa', crop: 'Soybean' },
-    { name: 'Rajesh Verma', phone: '9425098765', village: 'Sanwer', crop: 'Mustard' }
-  ];
-
-  const handleSelectDemo = (acc: typeof demoAccounts[0]) => {
+  const handleSelectDemo = (acc: typeof DEFAULT_DEMO_ACCOUNTS[0]) => {
     setPhone(acc.phone);
     setName(acc.name);
     setVillage(acc.village);
@@ -51,6 +70,17 @@ export const FarmerLogin: React.FC<{ onLoggedIn: () => void }> = ({ onLoggedIn }
       is_aadhaar_verified: true,
       created_at: new Date().toISOString()
     };
+
+    // Persist registered farmer in the local registry so they never vanish after reload
+    try {
+      const existing = loadSavedFarmers();
+      const updated = [
+        farmerProfile,
+        ...existing.filter(e => e.phone !== farmerProfile.phone)
+      ];
+      localStorage.setItem('mandi_farmers_registry', JSON.stringify(updated));
+      setDemoAccounts(updated);
+    } catch (e) {}
 
     try {
       if (typeof window !== 'undefined' && import.meta.env.DEV && window.location.port === '3000') {

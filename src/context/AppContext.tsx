@@ -72,24 +72,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Ref for optimistic sync tracking to avoid 1.5s poll flicker race condition (H-3)
   const pendingSyncTokens = useRef<Set<string>>(new Set());
 
-  // Default Ramesh with localStorage persistence (L-4: no full Aadhaar stored)
-  const [currentFarmer, setCurrentFarmer] = useState<Farmer | null>(() => {
-    try {
-      const saved = localStorage.getItem('mandi_current_farmer');
-      if (saved) return JSON.parse(saved);
-    } catch (e) {}
-    return {
-      farmer_id: 'f-ramesh',
-      name: 'Ramesh Kumar',
-      phone: '9876543210',
-      village: 'Rau Village',
-      district: 'Indore',
-      aadhaar_last4: '7821',
-      bank_account_last4: '4509',
-      is_aadhaar_verified: true,
-      created_at: new Date().toISOString()
-    };
-  });
+  // Always start fresh sessions at Farmer Login Screen (null)
+  const [currentFarmer, setCurrentFarmer] = useState<Farmer | null>(null);
 
   // Persistent Tokens State across sessions & devices (M-7: capped history)
   const [allTokens, setAllTokens] = useState<Token[]>(() => {
@@ -695,17 +679,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     setAllTokens(FALLBACK_TOKENS);
     setSmsLogs(FALLBACK_SMS_LOGS);
-    setCurrentFarmer({
-      farmer_id: 'f-ramesh',
-      name: 'Ramesh Kumar',
-      phone: '9876543210',
-      village: 'Rau Village',
-      district: 'Indore',
-      aadhaar_last4: '7821',
-      bank_account_last4: '4509',
-      is_aadhaar_verified: true,
-      created_at: new Date().toISOString()
-    });
+    setCurrentFarmer(null);
   };
 
   // Text-To-Speech helper
