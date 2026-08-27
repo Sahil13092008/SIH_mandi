@@ -12,6 +12,9 @@ import {
   Scale
 } from 'lucide-react';
 
+import { TokenConfirmationModal } from './TokenConfirmationModal';
+import { Token } from '../../types';
+
 export const RegisterLot: React.FC<{ onCreated: () => void; onCancel: () => void }> = ({ onCreated, onCancel }) => {
   const { currentFarmer, centers, createToken, t, language } = useApp();
   
@@ -20,6 +23,8 @@ export const RegisterLot: React.FC<{ onCreated: () => void; onCancel: () => void
   const [quantity, setQuantity] = useState<number>(10);
   const [selectedSlot, setSelectedSlot] = useState('07:00 AM - 09:00 AM');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [createdToken, setCreatedToken] = useState<Token | null>(null);
+  const [isConfirmationOpen, setIsConfirmationOpen] = useState(false);
 
   const selectedCenter = centers.find(c => c.center_id === selectedCenterId) || centers[0];
   const mspRate = MSP_DATA[selectedCrop]?.rate || 2275;
@@ -30,7 +35,7 @@ export const RegisterLot: React.FC<{ onCreated: () => void; onCancel: () => void
     if (!currentFarmer) return;
     setIsSubmitting(true);
     try {
-      await createToken({
+      const tok = await createToken({
         farmer_id: currentFarmer.farmer_id,
         farmer_name: currentFarmer.name,
         farmer_phone: currentFarmer.phone,
@@ -41,7 +46,8 @@ export const RegisterLot: React.FC<{ onCreated: () => void; onCancel: () => void
         msp_rate: mspRate,
         preferred_slot: selectedSlot
       });
-      onCreated();
+      setCreatedToken(tok);
+      setIsConfirmationOpen(true);
     } catch (err) {
       console.error(err);
     } finally {
@@ -251,6 +257,14 @@ export const RegisterLot: React.FC<{ onCreated: () => void; onCancel: () => void
           <span>{isSubmitting ? 'Generating Token...' : t.generateTokenBtn}</span>
         </button>
       </form>
+
+      {/* Confirmation Screen Modal */}
+      <TokenConfirmationModal
+        isOpen={isConfirmationOpen}
+        token={createdToken}
+        onClose={() => setIsConfirmationOpen(false)}
+        onViewTracker={onCreated}
+      />
     </div>
   );
 };

@@ -21,6 +21,9 @@ import {
   AlertCircle
 } from 'lucide-react';
 
+import { StaffLogin } from './StaffLogin';
+import { LogOut } from 'lucide-react';
+
 export const CenterDashboard: React.FC = () => {
   const { 
     centers, 
@@ -35,11 +38,27 @@ export const CenterDashboard: React.FC = () => {
     language 
   } = useApp();
 
+  const [currentStaff, setCurrentStaff] = useState<{
+    id: string;
+    name: string;
+    role_title: string;
+    center_id: string;
+    center_name: string;
+  } | null>(null);
+
   const [activeTab, setActiveTab] = useState<'queue' | 'register'>('queue');
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
   const [selectedTokenForQC, setSelectedTokenForQC] = useState<Token | null>(null);
   const [isManualModalOpen, setIsManualModalOpen] = useState(false);
   const [loadingTokenId, setLoadingTokenId] = useState<string | null>(null);
+
+  if (!currentStaff) {
+    return (
+      <div className="py-8 px-4">
+        <StaffLogin onLoggedIn={(staff) => setCurrentStaff(staff)} />
+      </div>
+    );
+  }
 
   // Filtered Queue
   const filteredQueue = centerQueue.filter(t => {
@@ -125,6 +144,19 @@ export const CenterDashboard: React.FC = () => {
               <PlusCircle className="w-4 h-4" />
               <span>Issue Walk-in Token</span>
             </button>
+
+            {currentStaff && (
+              <div className="flex items-center gap-2 bg-stone-100 p-1.5 pl-2.5 rounded-lg border border-stone-200 text-xs font-medium">
+                <span className="font-bold text-stone-900">👨‍💼 {currentStaff.name}</span>
+                <button
+                  onClick={() => setCurrentStaff(null)}
+                  className="p-1 rounded bg-white hover:bg-stone-200 border border-stone-300 text-stone-600 transition-colors"
+                  title="Logout Staff Terminal"
+                >
+                  <LogOut className="w-3.5 h-3.5 text-stone-600" />
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
