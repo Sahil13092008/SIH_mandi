@@ -282,16 +282,19 @@ export const FALLBACK_SMS_LOGS: SMSLog[] = [
   }
 ];
 
-export const getFallbackOverview = (): MinistryOverview => {
-  const procuredTokens = FALLBACK_TOKENS.filter(t => ['Procured', 'Payment Sent'].includes(t.status));
-  const totalQty = procuredTokens.reduce((acc, t) => acc + t.quantity, 0);
-  const totalPayout = procuredTokens.reduce((acc, t) => acc + t.payment_amount, 0);
+export const getFallbackOverview = (
+  tokensList: Token[] = FALLBACK_TOKENS, 
+  centersList: Center[] = FALLBACK_CENTERS
+): MinistryOverview => {
+  const procuredTokens = tokensList.filter(t => ['Procured', 'Payment Sent'].includes(t.status));
+  const totalQty = procuredTokens.reduce((acc, t) => acc + (t.quantity || 0), 0);
+  const totalPayout = procuredTokens.reduce((acc, t) => acc + (t.payment_amount || 0), 0);
 
-  const centerAnalytics = FALLBACK_CENTERS.map(c => {
-    const centerTokens = FALLBACK_TOKENS.filter(t => t.center_id === c.center_id);
+  const centerAnalytics = centersList.map(c => {
+    const centerTokens = tokensList.filter(t => t.center_id === c.center_id);
     const centerProcured = centerTokens.filter(t => ['Procured', 'Payment Sent'].includes(t.status));
-    const centerQty = centerProcured.reduce((acc, t) => acc + t.quantity, 0);
-    const centerPayout = centerProcured.reduce((acc, t) => acc + t.payment_amount, 0);
+    const centerQty = centerProcured.reduce((acc, t) => acc + (t.quantity || 0), 0);
+    const centerPayout = centerProcured.reduce((acc, t) => acc + (t.payment_amount || 0), 0);
 
     return {
       center_id: c.center_id,
@@ -308,7 +311,7 @@ export const getFallbackOverview = (): MinistryOverview => {
         { crop: 'Gram (चना)', quantity: 15, amount: 81600 }
       ],
       hourly_arrivals: [
-        { hour: '07:00 AM', count: 4 },
+        { hour: '07:00 AM', count: 4 + centerTokens.length },
         { hour: '08:00 AM', count: 7 },
         { hour: '09:00 AM', count: 12 },
         { hour: '10:00 AM', count: 15 },
@@ -320,8 +323,8 @@ export const getFallbackOverview = (): MinistryOverview => {
   });
 
   return {
-    total_centers: FALLBACK_CENTERS.length,
-    active_centers: FALLBACK_CENTERS.filter(c => c.operational_status !== 'Full').length,
+    total_centers: centersList.length,
+    active_centers: centersList.filter(c => c.operational_status !== 'Full').length,
     total_farmers_served_today: procuredTokens.length + 18,
     total_procurement_quintals: totalQty + 420,
     total_disbursed_inr: totalPayout + 950000,

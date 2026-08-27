@@ -20,6 +20,7 @@ interface AppContextType {
   setSelectedCenterId: (id: string) => void;
   selectedCenter?: Center;
   centerQueue: Token[];
+  allTokens: Token[];
   refreshCenterQueue: () => Promise<void>;
   
   // Farmer session
@@ -306,6 +307,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setActiveToken(newToken);
     setCenterQueue(prev => [newToken, ...prev]);
     setFarmerTokens(prev => [newToken, ...prev]);
+
+    const createSms: SMSLog = {
+      id: `sms-${Date.now()}`,
+      token_id: newToken.token_id,
+      phone: newToken.farmer_phone,
+      farmer_name: newToken.farmer_name,
+      message: `[e-MANDI ALERT] Digital Token ${newToken.token_number} generated for ${newToken.farmer_name}. Lot: ${newToken.quantity} Qtl ${newToken.crop}. Time slot: ${newToken.preferred_slot}.`,
+      message_hi: `[ई-मंडी सूचना] किसान ${newToken.farmer_name} के लिए डिजिटल टोकन ${newToken.token_number} जारी किया गया। उपज: ${newToken.quantity} क्विंटल ${newToken.crop}। समय: ${newToken.preferred_slot}।`,
+      trigger_event: 'TOKEN_CONFIRMED',
+      sent_at: nowIso,
+      status: 'Delivered'
+    };
+    setSmsLogs(prev => [createSms, ...prev]);
+    setNewSmsAlert(createSms);
+
     return newToken;
   };
 
@@ -352,6 +368,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCenterQueue(prev => prev.map(t => t.token_id === tokenId ? updatedToken : t));
     setFarmerTokens(prev => prev.map(t => t.token_id === tokenId ? updatedToken : t));
     if (activeToken?.token_id === tokenId) setActiveToken(updatedToken);
+
+    let eventName: SMSLog['trigger_event'] = 'QUEUE_ADVANCED';
+    let msgEn = `[e-MANDI ALERT] Token ${updatedToken.token_number} status updated to ${nextStatus}.`;
+    let msgHi = `[ई-मंडी सूचना] टोकन ${updatedToken.token_number} का स्टेटस ${nextStatus} हो गया है।`;
+
+    if (nextStatus === 'In Queue') {
+      eventName = 'QUEUE_ADVANCED';
+      msgEn = `[e-MANDI GATE ENTRY] Token ${updatedToken.token_number} (${updatedToken.farmer_name}): Gate entry verified at ${updatedToken.center_name}. Position #${updatedToken.queue_position}.`;
+      msgHi = `[ई-मंडी प्रवेश] टोकन ${updatedToken.token_number} (${updatedToken.farmer_name}): गेट पर सत्यापन सफल। कतार स्थान: #${updatedToken.queue_position}।`;
+    } else if (nextStatus === 'Quality Check') {
+      eventName = 'QUALITY_CHECK_DONE';
+      msgEn = `[e-MANDI LAB TEST] Token ${updatedToken.token_number}: Quality inspection passed. Grade: ${qcResult?.grade || 'Grade A'}. Moisture: ${qcResult?.moisture || '11%'}%.`;
+      msgHi = `[ई-मंडी लैब जाँच] टोकन ${updatedToken.token_number}: गुणवत्ता परीक्षण पास। ग्रेड: ${qcResult?.grade || 'Grade A'}। नमी: ${qcResult?.moisture || '11%'}%।`;
+    } else if (nextStatus === 'Procured') {
+      eventName = 'PROCURED';
+      msgEn = `[e-MANDI WEIGHBRIDGE] Token ${updatedToken.token_number}: ${updatedToken.quantity} Qtl ${updatedToken.crop} weighed & procured at MSP ₹${updatedToken.msp_rate}/Qtl. Gross amount: ₹${updatedToken.payment_amount.toLocaleString('en-IN')}.`;
+      msgHi = `[ई-मंडी तौल] टोकन ${updatedToken.token_number}: ${updatedToken.quantity} क्विंटल ${updatedToken.crop} का उपार्जन दर्ज हुआ। कुल राशि: ₹${updatedToken.payment_amount.toLocaleString('en-IN')}।`;
+    }
+
+    const statusSms: SMSLog = {
+      id: `sms-${Date.now()}`,
+      token_id: updatedToken.token_id,
+      phone: updatedToken.farmer_phone,
+      farmer_name: updatedToken.farmer_name,
+      message: msgEn,
+      message_hi: msgHi,
+      trigger_event: eventName,
+      sent_at: nowIso,
+      status: 'Delivered'
+    };
+    setSmsLogs(prev => [statusSms, ...prev]);
+    setNewSmsAlert(statusSms);
+
     return updatedToken;
   };
 
@@ -392,6 +441,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setCenterQueue(prev => prev.map(t => t.token_id === tokenId ? updatedToken : t));
       setFarmerTokens(prev => prev.map(t => t.token_id === tokenId ? updatedToken : t));
       if (activeToken?.token_id === tokenId) setActiveToken(updatedToken);
+
+      const paymentSms: SMSLog = {
+        id: `sms-${Date.now()}`,
+        token_id: updatedToken.token_id,
+        phone: updatedToken.farmer_phone,
+        farmer_name: updatedToken.farmer_name,
+        message: `[GOV-PFMS / DBT] Payment of ₹${updatedToken.payment_amount.toLocaleString('en-IN')} successfully SENT to bank account of ${updatedToken.farmer_name} for Token ${updatedToken.token_number}. Ref: ${updatedToken.payment_reference}.`,
+        message_hi: `[डीबीटी भुगतान सफल] टोकन ${updatedToken.token_number} के एवज में ₹${updatedToken.payment_amount.toLocaleString('en-IN')} की राशि किसान ${updatedToken.farmer_name} के बैंक खाते में भेज दी गई है। संदर्भ: ${updatedToken.payment_reference}।`,
+        trigger_event: 'PAYMENT_SENT',
+        sent_at: nowIso,
+        status: 'Delivered'
+      };
+      setSmsLogs(prev => [paymentSms, ...prev]);
+      setNewSmsAlert(paymentSms);
     }
   };
 
@@ -476,6 +539,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setSelectedCenterId,
         selectedCenter,
         centerQueue,
+        allTokens,
         refreshCenterQueue,
         currentFarmer,
         setCurrentFarmer,

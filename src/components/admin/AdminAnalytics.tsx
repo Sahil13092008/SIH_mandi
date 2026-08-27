@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 
 export const AdminAnalytics: React.FC = () => {
-  const { t } = useApp();
+  const { t, allTokens, centers } = useApp();
   const [overview, setOverview] = useState<MinistryOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedCenterFilter, setSelectedCenterFilter] = useState('ALL');
@@ -35,13 +35,13 @@ export const AdminAnalytics: React.FC = () => {
     } catch (err) {
       console.warn('API overview fetch failed, using telemetry fallback data:', err);
     }
-    setOverview(getFallbackOverview());
+    setOverview(getFallbackOverview(allTokens, centers));
     setLoading(false);
   };
 
   useEffect(() => {
     fetchOverview();
-  }, []);
+  }, [allTokens, centers]);
 
   if (loading || !overview) {
     return (
