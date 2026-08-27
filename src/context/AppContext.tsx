@@ -203,9 +203,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             setAllTokens(remoteTokens);
             setLastUpdated(new Date());
           }
+        } else if (error) {
+          console.error('[Supabase Fetch Error]', error.message, error.details, error.hint);
         }
       } catch (err) {
-        console.warn('[Supabase Fetch] Error loading tokens:', err);
+        console.error('[Supabase Fetch Exception]', err);
       }
     };
 

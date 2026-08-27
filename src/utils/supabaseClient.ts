@@ -36,8 +36,13 @@ export const syncTokenToSupabase = async (token: any) => {
       created_at: token.created_at,
       updated_at: token.updated_at
     };
-    await supabaseClient.from('tokens').upsert(payload, { onConflict: 'token_id' });
+    const { error } = await supabaseClient.from('tokens').upsert(payload, { onConflict: 'token_id' });
+    if (error) {
+      console.error('[Supabase Upsert Error]', error.message, error.details, error.hint);
+    } else {
+      console.log(`[Supabase Sync Success] Token ${token.token_number} (${token.status}) synced to cloud DB.`);
+    }
   } catch (err) {
-    console.warn('[Supabase Sync Warning] Could not sync token:', err);
+    console.error('[Supabase Sync Exception]', err);
   }
 };
