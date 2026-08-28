@@ -6,7 +6,7 @@ import {
   FALLBACK_TOKENS, 
   FALLBACK_SMS_LOGS 
 } from '../utils/clientFallback';
-import { supabaseClient, syncTokenToSupabase } from '../utils/supabaseClient';
+import { supabaseClient, syncTokenToSupabase, syncFarmerToSupabase } from '../utils/supabaseClient';
 import { CreateTokenSchema, AdvanceStatusSchema } from '../utils/validation';
 
 interface AppContextType {
@@ -28,6 +28,7 @@ interface AppContextType {
   // Farmer session
   currentFarmer: Farmer | null;
   setCurrentFarmer: (farmer: Farmer | null) => void;
+  registerFarmer: (farmer: Farmer) => Promise<void>;
   updateFarmerProfile: (updates: Partial<Farmer>) => Promise<Farmer>;
   activeToken: Token | null;
   setActiveToken: (token: Token | null) => void;
@@ -63,14 +64,47 @@ const isLocalDevServer = (): boolean => {
   return typeof window !== 'undefined' && import.meta.env.DEV && window.location.port === '3000';
 };
 
+// M-1: Typed remote row from Supabase (replaces `any`)
+interface RemoteTokenRow {
+  token_id: string;
+  farmer_id: string;
+  farmer_name: string;
+  farmer_phone: string;
+  farmer_village: string;
+  center_id: string;
+  center_name: string;
+  crop: string;
+  quantity: string | number;
+  msp_rate: string | number;
+  preferred_slot: string;
+  token_number: string;
+  queue_position: string | number;
+  estimated_time?: string;
+  estimated_minutes?: string | number;
+  status: string;
+  quality_check_result?: string | Record<string, unknown> | null;
+  payment_amount?: string | number;
+  payment_method?: string | null;
+  payment_reference?: string | null;
+  payment_confirmed_at?: string | null;
+  status_history?: string | unknown[] | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [role, setRole] = useState<AppRole>('farmer');
   const [language, setLanguage] = useState<AppLanguage>('en');
   const [centers, setCenters] = useState<Center[]>(FALLBACK_CENTERS);
   const [selectedCenterId, setSelectedCenterId] = useState<string>('c-rau');
   
-  // Ref for optimistic sync tracking to avoid 1.5s poll flicker race condition (H-3)
+  // H-3: Ref for optimistic sync tracking to avoid poll flicker race condition
   const pendingSyncTokens = useRef<Set<string>>(new Set());
+
+  // Group 2: Post-reset polling filter — for 8 seconds after resetDemoData(), the
+  // Supabase poll only accepts FALLBACK_TOKEN ids, preventing session-created tokens
+  // (which remain in Supabase since anon has no DELETE) from flooding back in.
+  const postResetFilterUntil = useRef<number>(0);
 
   // Always start fresh sessions at Farmer Login Screen (null)
   const [currentFarmer, setCurrentFarmer] = useState<Farmer | null>(null);
@@ -80,8 +114,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const saved = localStorage.getItem('mandi_all_tokens');
       if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        const parsed = JSON.parse(saved) as unknown;
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed as Token[];
       }
     } catch (e) {}
     return FALLBACK_TOKENS;
@@ -101,8 +135,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const saved = localStorage.getItem('mandi_sms_logs');
       if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        const parsed = JSON.parse(saved) as unknown;
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed as SMSLog[];
       }
     } catch (e) {}
     return FALLBACK_SMS_LOGS;
@@ -162,9 +196,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const handleStorage = (e: StorageEvent) => {
       if (e.key === 'mandi_all_tokens' && e.newValue) {
         try {
-          const parsed = JSON.parse(e.newValue);
+          const parsed = JSON.parse(e.newValue) as unknown;
           if (Array.isArray(parsed) && parsed.length > 0) {
-            setAllTokens(parsed);
+            setAllTokens(parsed as Token[]);
             setLastUpdated(new Date());
           }
         } catch (err) {}
@@ -174,6 +208,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => window.removeEventListener('storage', handleStorage);
   }, []);
 
+  // M-1: Typed remote-row parser (no `any`)
+  const parseRemote = (d: RemoteTokenRow): Token => ({
+    token_id: d.token_id,
+    farmer_id: d.farmer_id,
+    farmer_name: d.farmer_name,
+    farmer_phone: d.farmer_phone,
+    farmer_village: d.farmer_village,
+    center_id: d.center_id,
+    center_name: d.center_name,
+    crop: d.crop,
+    quantity: Number(d.quantity),
+    msp_rate: Number(d.msp_rate),
+    preferred_slot: d.preferred_slot,
+    token_number: d.token_number,
+    queue_position: Number(d.queue_position ?? 0),
+    estimated_time: (d.estimated_time as string | undefined) || '~15 mins',
+    estimated_minutes: Number(d.estimated_minutes ?? 15),
+    status: d.status as Token['status'],
+    quality_check_result: typeof d.quality_check_result === 'string'
+      ? (JSON.parse(d.quality_check_result) as QualityCheckResult)
+      : (d.quality_check_result as unknown as QualityCheckResult | undefined),
+    payment_amount: Number(d.payment_amount ?? 0),
+    payment_method: d.payment_method ?? undefined,
+    payment_reference: d.payment_reference ?? undefined,
+    payment_confirmed_at: d.payment_confirmed_at ?? undefined,
+    status_history: typeof d.status_history === 'string'
+      ? (JSON.parse(d.status_history) as Token['status_history'])
+      : ((d.status_history as Token['status_history']) || []),
+    created_at: d.created_at,
+    updated_at: d.updated_at,
+  });
+
   // Supabase Initial Sync & High-Frequency Cross-Device Sync (3s Polling + Realtime WebSockets)
   useEffect(() => {
     if (!supabaseClient) {
@@ -181,42 +247,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
 
-    const parseRemote = (d: Record<string, any>): Token => ({
-      token_id: d.token_id,
-      farmer_id: d.farmer_id,
-      farmer_name: d.farmer_name,
-      farmer_phone: d.farmer_phone,
-      farmer_village: d.farmer_village,
-      center_id: d.center_id,
-      center_name: d.center_name,
-      crop: d.crop,
-      quantity: Number(d.quantity),
-      msp_rate: Number(d.msp_rate),
-      preferred_slot: d.preferred_slot,
-      token_number: d.token_number,
-      queue_position: Number(d.queue_position || 0),
-      estimated_time: d.estimated_time || '~15 mins',
-      estimated_minutes: Number(d.estimated_minutes || 15),
-      status: d.status,
-      quality_check_result: typeof d.quality_check_result === 'string' ? JSON.parse(d.quality_check_result) : d.quality_check_result,
-      payment_amount: Number(d.payment_amount || 0),
-      payment_method: d.payment_method,
-      payment_reference: d.payment_reference,
-      payment_confirmed_at: d.payment_confirmed_at,
-      status_history: typeof d.status_history === 'string' ? JSON.parse(d.status_history) : (d.status_history || []),
-      created_at: d.created_at,
-      updated_at: d.updated_at
-    });
+    const fallbackIds = new Set(FALLBACK_TOKENS.map(t => t.token_id));
 
     const loadSupabaseTokens = async () => {
       try {
-        const { data, error } = await supabaseClient.from('tokens').select('*').order('created_at', { ascending: false });
+        const { data, error } = await supabaseClient
+          .from('tokens')
+          .select('*')
+          .order('created_at', { ascending: false });
+
         if (!error && Array.isArray(data)) {
           if (data.length === 0) {
             // Auto-seed initial tokens to Supabase DB
             allTokens.forEach(t => syncTokenToSupabase(t));
           } else {
-            const remoteTokens: Token[] = data.map(parseRemote);
+            const rawTokens = data as RemoteTokenRow[];
+
+            // Group 2: Post-reset filter — for 8s after reset, only accept FALLBACK token IDs.
+            // This prevents session-created tokens (remaining in Supabase since anon has no DELETE)
+            // from flooding back immediately after reset.
+            const filtered = Date.now() < postResetFilterUntil.current
+              ? rawTokens.filter(r => fallbackIds.has(r.token_id))
+              : rawTokens;
+
+            const remoteTokens: Token[] = filtered.map(parseRemote);
             
             // H-3: Avoid clobbering pending local optimistic mutations
             setAllTokens(prev => {
@@ -237,10 +291,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             setIsConnected(true);
           }
         } else if (error) {
-          console.error('[Supabase Fetch Error]', error.message, error.details, error.hint);
+          if (import.meta.env.DEV) {
+            console.error('[Supabase Fetch Error]', error.message);
+          }
         }
       } catch (err) {
-        console.error('[Supabase Fetch Exception]', err);
+        if (import.meta.env.DEV) {
+          console.error('[Supabase Fetch Exception]', err);
+        }
       }
     };
 
@@ -250,9 +308,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const channel = supabaseClient
       .channel('realtime:tokens')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tokens' }, payload => {
-        const newRecord = payload.new as Record<string, any>;
+        const newRecord = payload.new as Record<string, unknown>;
         if (newRecord && newRecord.token_id) {
-          const formatted = parseRemote(newRecord);
+          const formatted = parseRemote(newRecord as unknown as RemoteTokenRow);
           // If this record was pending, remove from pendingSync set as remote is now confirmed
           pendingSyncTokens.current.delete(formatted.token_id);
 
@@ -290,9 +348,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       try {
         const res = await fetch('/api/centers');
         if (res.ok) {
-          const data = await res.json();
-          if (Array.isArray(data) && data.length > 0) {
-            setCenters(data);
+          const data = await res.json() as unknown;
+          if (Array.isArray(data) && (data as Center[]).length > 0) {
+            setCenters(data as Center[]);
             return;
           }
         }
@@ -310,7 +368,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       try {
         const res = await fetch(`/api/centers/${selectedCenterId}/queue`);
         if (res.ok) {
-          const data = await res.json();
+          const data = await res.json() as { queue?: Token[] };
           if (data && Array.isArray(data.queue)) {
             setCenterQueue(data.queue);
             setLastUpdated(new Date());
@@ -333,7 +391,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       try {
         const res = await fetch(`/api/farmers/${targetPhone}/tokens`);
         if (res.ok) {
-          const data: Token[] = await res.json();
+          const data = await res.json() as Token[];
           if (Array.isArray(data) && data.length > 0) {
             setFarmerTokens(data);
             const found = activeToken ? data.find(t => t.token_id === activeToken.token_id) : data[0];
@@ -358,7 +416,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       try {
         const res = await fetch('/api/sms-log');
         if (res.ok) {
-          const data = await res.json();
+          const data = await res.json() as SMSLog[];
           if (Array.isArray(data) && data.length > 0) {
             setSmsLogs(data);
             return;
@@ -387,7 +445,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [currentFarmer, refreshFarmerTokens]);
 
-  // Realtime SSE Listener (Dev only)
+  // Realtime SSE Listener (Dev only — H-1/M-4: Express dev server only)
   useEffect(() => {
     if (!isLocalDevServer()) return;
 
@@ -401,7 +459,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         refreshSmsLogs();
       });
       eventSource.addEventListener('token_updated', (e) => {
-        const updatedToken: Token = JSON.parse(e.data);
+        const updatedToken = JSON.parse((e as MessageEvent).data) as Token;
         refreshCenterQueue();
         if (currentFarmer?.phone) refreshFarmerTokens(currentFarmer.phone);
         if (activeToken && activeToken.token_id === updatedToken.token_id) {
@@ -410,13 +468,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         refreshSmsLogs();
       });
       eventSource.addEventListener('sms_sent', (e) => {
-        const newLog: SMSLog = JSON.parse(e.data);
+        const newLog = JSON.parse((e as MessageEvent).data) as SMSLog;
         setSmsLogs(prev => [newLog, ...prev]);
         setNewSmsAlert(newLog);
       });
-      eventSource.onerror = () => {
-        // don't mask error
-      };
     } catch (err) {}
 
     return () => {
@@ -424,24 +479,55 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [selectedCenterId, currentFarmer?.phone, activeToken?.token_id, refreshCenterQueue, refreshFarmerTokens, refreshSmsLogs]);
 
-  // Token Creation Action (H-2: Monotonic sequence; M-5: crypto.randomUUID; H-3: pendingSync)
+  // Group 1.5: Register farmer — persists to both localStorage registry and Supabase
+  const registerFarmer = async (farmer: Farmer): Promise<void> => {
+    setCurrentFarmer(farmer);
+    // Persist to localStorage farmers registry (same-device persistence)
+    try {
+      const raw = localStorage.getItem('mandi_farmers_registry');
+      const existing: Farmer[] = raw ? (JSON.parse(raw) as Farmer[]) : [];
+      const updated = [farmer, ...existing.filter(f => f.phone !== farmer.phone)];
+      localStorage.setItem('mandi_farmers_registry', JSON.stringify(updated));
+    } catch (e) {}
+    // Persist to Supabase (cross-device persistence, fire-and-forget)
+    syncFarmerToSupabase(farmer);
+  };
+
+  // Token Creation Action (H-2: Monotonic sequence with Supabase MAX; M-5: crypto.randomUUID; H-3: pendingSync)
   const createToken = async (data: Partial<Token>): Promise<Token> => {
     const nowIso = new Date().toISOString();
     const tokenUid = `t-${typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID().slice(0, 8) : Date.now()}`;
-    const selectedCrop = (data.crop || 'Wheat (गेहूं)') as any;
-    const officialRate = (MSP_DATA as any)[selectedCrop]?.rate || 2275;
+    const selectedCrop = (data.crop || 'Wheat (गेहूं)');
+    // M-1: typed MSP_DATA access — cast through Record<string, { rate: number }> for safe indexing
+    const officialRate = (MSP_DATA as Record<string, { rate: number }>)[selectedCrop]?.rate || 2275;
     const quantityNum = Number(data.quantity || 10);
     const targetCenterId = data.center_id || selectedCenterId || 'c-rau';
     const centerInfo = centers.find(c => c.center_id === targetCenterId);
 
-    // Compute monotonic token number (H-2 / Collision prevention)
+    // H-2: Query Supabase for the true global MAX token number to prevent cross-device collisions
+    let maxSeqFromDB = 106;
+    if (supabaseClient) {
+      try {
+        const { data: rows } = await supabaseClient
+          .from('tokens')
+          .select('token_number')
+          .order('token_number', { ascending: false })
+          .limit(1);
+        if (rows && rows.length > 0) {
+          const match = ((rows[0] as { token_number?: string }).token_number || '').match(/A-(\d+)/);
+          if (match) maxSeqFromDB = parseInt(match[1], 10);
+        }
+      } catch (_e) {}
+    }
+    // Take max of DB and in-memory to handle both online and offline cases
     const existingNums = allTokens
       .map(t => {
         const match = (t.token_number || '').match(/A-(\d+)/);
         return match ? parseInt(match[1], 10) : 100;
       })
       .filter(n => !isNaN(n));
-    const maxSeq = existingNums.length > 0 ? Math.max(...existingNums) : 106;
+    const localMax = existingNums.length > 0 ? Math.max(...existingNums) : 106;
+    const maxSeq = Math.max(localMax, maxSeqFromDB);
     const nextTokenNumber = `A-${maxSeq + 1}`;
 
     const activeInCenter = allTokens.filter(t => t.center_id === targetCenterId && ['Registered', 'In Queue', 'Quality Check'].includes(t.status)).length;
@@ -510,6 +596,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     qcResult?: QualityCheckResult, 
     note?: string
   ): Promise<Token> => {
+    // C-3: Validate status transition
+    const statusValidation = AdvanceStatusSchema.safeParse({
+      status: nextStatus,
+      quality_check_result: qcResult,
+      note
+    });
+    if (!statusValidation.success && import.meta.env.DEV) {
+      console.warn('[advanceTokenStatus] Validation warning:', statusValidation.error.flatten());
+    }
+
     const nowIso = new Date().toISOString();
     let targetToken = allTokens.find(t => t.token_id === tokenId) || centerQueue.find(t => t.token_id === tokenId) || activeToken;
     if (!targetToken) {
@@ -582,6 +678,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (activeToken?.token_id === tokenId) setActiveToken(updatedToken);
 
     // Live Database Sync
+    // Note: if finalStatus === 'Payment Sent', syncTokenToSupabase will fail at the
+    // RLS layer (tokens_update_anon WITH CHECK excludes 'Payment Sent'). The optimistic
+    // UI state is already set correctly above. This is the accepted tradeoff per C-2.
     syncTokenToSupabase(updatedToken).then(() => {
       pendingSyncTokens.current.delete(tokenId);
     });
@@ -644,6 +743,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setAllTokens(prev => prev.map(t => t.token_id === tokenId ? updatedToken : t));
       if (activeToken?.token_id === tokenId) setActiveToken(updatedToken);
 
+      // Note: syncTokenToSupabase will fail at RLS (no anon 'Payment Sent' UPDATE).
+      // The local UI state is correctly updated optimistically. This is accepted per C-2.
       syncTokenToSupabase(updatedToken).then(() => {
         pendingSyncTokens.current.delete(tokenId);
       });
@@ -664,19 +765,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Reset Demo Action (Clean atomic delete + seed)
+  // Reset Demo Action
+  // Known limitation: anon has no DELETE policy on tokens (by design, C-2).
+  // The Supabase DELETE call will be rejected by RLS. The fix:
+  //   1. Clear localStorage immediately (instant UI reset).
+  //   2. Set postResetFilterUntil for 8s so polls ignore non-fallback tokens.
+  //   3. Re-seed FALLBACK_TOKENS via upsert (overwriting t-101..t-106 in Supabase).
+  //   4. Session-created tokens remain in Supabase but are filtered out locally for 8s.
   const resetDemoData = async () => {
     try {
       localStorage.removeItem('mandi_all_tokens');
       localStorage.removeItem('mandi_sms_logs');
       localStorage.removeItem('mandi_current_farmer');
-      if (supabaseClient) {
+    } catch (e) {}
+
+    // Activate post-reset filter for 8 seconds
+    postResetFilterUntil.current = Date.now() + 8000;
+
+    if (supabaseClient) {
+      try {
+        // The DELETE will fail silently due to RLS (no anon DELETE policy). That is expected.
         await supabaseClient.from('tokens').delete().neq('token_id', '');
-        await Promise.all(FALLBACK_TOKENS.map(t => syncTokenToSupabase(t)));
-      }
-    } catch (err) {
-      console.warn('[Reset Demo Warning]', err);
+      } catch (_e) {}
+      // Re-seed fallback tokens via upsert (allowed by anon INSERT/UPDATE policies)
+      await Promise.all(FALLBACK_TOKENS.map(t => syncTokenToSupabase(t)));
     }
+
     setAllTokens(FALLBACK_TOKENS);
     setSmsLogs(FALLBACK_SMS_LOGS);
     setCurrentFarmer(null);
@@ -705,6 +819,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       is_aadhaar_verified: updates.is_aadhaar_verified ?? currentFarmer.is_aadhaar_verified
     };
     setCurrentFarmer(updatedFarmer);
+    // Persist profile update to Supabase (fire-and-forget)
+    syncFarmerToSupabase(updatedFarmer);
     return updatedFarmer;
   };
 
@@ -727,6 +843,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         refreshCenterQueue,
         currentFarmer,
         setCurrentFarmer,
+        registerFarmer,
         updateFarmerProfile,
         activeToken,
         setActiveToken,

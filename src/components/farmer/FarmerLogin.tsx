@@ -1,21 +1,29 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
-import { Phone, ShieldCheck, ArrowRight, UserPlus, Check, Sparkles } from 'lucide-react';
+import { Farmer } from '../../types';
+import { ShieldCheck, ArrowRight, UserPlus, Sparkles } from 'lucide-react';
 
-const DEFAULT_DEMO_ACCOUNTS = [
+export interface DemoFarmerAccount {
+  name: string;
+  phone: string;
+  village: string;
+  crop?: string;
+}
+
+const DEFAULT_DEMO_ACCOUNTS: DemoFarmerAccount[] = [
   { name: 'Ramesh Kumar', phone: '9876543210', village: 'Rau Village', crop: 'Wheat' },
   { name: 'Suresh Patel', phone: '9826012345', village: 'Rangwasa', crop: 'Soybean' },
   { name: 'Rajesh Verma', phone: '9425098765', village: 'Sanwer', crop: 'Mustard' }
 ];
 
-const loadSavedFarmers = () => {
+const loadSavedFarmers = (): DemoFarmerAccount[] => {
   try {
     const raw = localStorage.getItem('mandi_farmers_registry');
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        const phoneSet = new Set(parsed.map((p: any) => p.phone));
-        const merged = [...parsed];
+        const phoneSet = new Set(parsed.map((p: DemoFarmerAccount) => p.phone));
+        const merged: DemoFarmerAccount[] = [...parsed];
         DEFAULT_DEMO_ACCOUNTS.forEach(d => {
           if (!phoneSet.has(d.phone)) merged.push(d);
         });
@@ -27,7 +35,7 @@ const loadSavedFarmers = () => {
 };
 
 export const FarmerLogin: React.FC<{ onLoggedIn: () => void }> = ({ onLoggedIn }) => {
-  const { t, setCurrentFarmer, refreshFarmerTokens } = useApp();
+  const { t, registerFarmer, refreshFarmerTokens } = useApp();
   const [demoAccounts, setDemoAccounts] = useState(loadSavedFarmers);
   const [phone, setPhone] = useState('9876543210');
   const [name, setName] = useState('Ramesh Kumar');
@@ -55,31 +63,37 @@ export const FarmerLogin: React.FC<{ onLoggedIn: () => void }> = ({ onLoggedIn }
     e.preventDefault();
     setLoading(true);
 
+    const isDemoAccount = DEFAULT_DEMO_ACCOUNTS.some(d => d.phone === phone);
     const matchedDemo = demoAccounts.find(d => d.phone === phone);
     const farmerName = (isRegisterMode ? name.trim() : '') || (matchedDemo ? matchedDemo.name : 'Kisan Bhaai');
     const farmerVillage = (isRegisterMode ? village.trim() : '') || (matchedDemo ? matchedDemo.village : 'Rau Village');
 
-    const farmerProfile = {
+    // For demo seed accounts, keep the familiar aadhaar/bank stubs.
+    // For newly registered farmers, leave those fields empty (last-4 unknown without real KYC).
+    const farmerProfile: Farmer = {
       farmer_id: `f-${phone}`,
       name: farmerName,
       phone,
       village: farmerVillage,
       district: 'Indore',
-      aadhaar_last4: '7821',
-      bank_account_last4: '4509',
-      is_aadhaar_verified: true,
+      aadhaar_last4: isDemoAccount ? '7821' : undefined,
+      bank_account_last4: isDemoAccount ? '4509' : undefined,
+      is_aadhaar_verified: isDemoAccount,
       created_at: new Date().toISOString()
     };
 
-    // Persist registered farmer in the local registry so they never vanish after reload
+    // Persist locally + to Supabase via registerFarmer (Group 1.5)
+    // Also keep the local demo-accounts list in sync for the UI dropdown
     try {
-      const existing = loadSavedFarmers();
-      const updated = [
-        farmerProfile,
-        ...existing.filter(e => e.phone !== farmerProfile.phone)
-      ];
-      localStorage.setItem('mandi_farmers_registry', JSON.stringify(updated));
-      setDemoAccounts(updated);
+      const demoEntry: DemoFarmerAccount = {
+        name: farmerProfile.name,
+        phone: farmerProfile.phone,
+        village: farmerProfile.village
+      };
+      setDemoAccounts(prev => [
+        demoEntry,
+        ...prev.filter(e => e.phone !== farmerProfile.phone)
+      ]);
     } catch (e) {}
 
     try {
@@ -94,9 +108,9 @@ export const FarmerLogin: React.FC<{ onLoggedIn: () => void }> = ({ onLoggedIn }
           })
         });
         if (res.ok) {
-          const farmer = await res.json();
+          const farmer = await res.json() as Farmer;
           if (farmer && farmer.farmer_id) {
-            setCurrentFarmer(farmer);
+            await registerFarmer(farmer);
             await refreshFarmerTokens(farmer.phone);
             onLoggedIn();
             return;
@@ -104,11 +118,11 @@ export const FarmerLogin: React.FC<{ onLoggedIn: () => void }> = ({ onLoggedIn }
         }
       }
     } catch (err) {
-      console.warn('[FarmerLogin] Local API bypass, using cloud profile:', err);
+      // Fall through to client-side path
     }
 
-    // Client-side authentication / registration
-    setCurrentFarmer(farmerProfile);
+    // Client-side path: registerFarmer writes to localStorage + Supabase
+    await registerFarmer(farmerProfile);
     await refreshFarmerTokens(farmerProfile.phone);
     onLoggedIn();
     setLoading(false);

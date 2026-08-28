@@ -1,46 +1,49 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { Token } from '../types';
+import { Token, Farmer } from '../types';
 
-const DEFAULT_SUPABASE_URL = 'https://hfrzvhftrtvgcryyxmxx.supabase.co';
-const DEFAULT_SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhmcnp2aGZ0cnR2Z2NyeXl4bXh4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc4MDU4MjksImV4cCI6MjEwMzM4MTgyOX0.Egj_utV5g72kxQCAbwPkW_5QbIjAVD8nxU86bZ5V3jg';
+// C-1: No hardcoded credentials. Credentials must be supplied via environment
+// variables (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY). If they are absent
+// the app degrades gracefully into offline/localStorage-only mode.
+const SUPABASE_URL: string =
+  import.meta.env.VITE_SUPABASE_URL ||
+  import.meta.env.SUPABASE_URL ||
+  '';
 
-const SUPABASE_URL: string = 
-  (import.meta.env?.VITE_SUPABASE_URL as string) || 
-  (import.meta.env?.SUPABASE_URL as string) || 
-  DEFAULT_SUPABASE_URL;
+const SUPABASE_ANON_KEY: string =
+  import.meta.env.VITE_SUPABASE_ANON_KEY ||
+  import.meta.env.SUPABASE_ANON_KEY ||
+  '';
 
-const SUPABASE_ANON_KEY: string = 
-  (import.meta.env?.VITE_SUPABASE_ANON_KEY as string) || 
-  (import.meta.env?.SUPABASE_ANON_KEY as string) || 
-  DEFAULT_SUPABASE_ANON_KEY;
-
-export const isSupabaseConfigured = (): boolean => {
-  return Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
-};
+export const isSupabaseConfigured = (): boolean =>
+  Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 
 let supabaseInstance: SupabaseClient | null = null;
 
 if (SUPABASE_URL && SUPABASE_ANON_KEY) {
   try {
     supabaseInstance = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-    if (import.meta.env?.DEV) {
-      console.log('[Supabase] Client initialized successfully.');
+    // L-2: connection log is dev-only and contains no user data
+    if (import.meta.env.DEV) {
+      console.log('[Supabase] Client initialised (URL prefix:', SUPABASE_URL.slice(0, 30), ')');
     }
   } catch (err) {
-    console.warn('[Supabase] Failed to initialize client:', err);
+    console.warn('[Supabase] Failed to initialise client:', err);
   }
 } else {
-  if (import.meta.env?.DEV) {
-    console.log('[Supabase] No credentials provided. Running in offline/fallback mode.');
+  if (import.meta.env.DEV) {
+    console.log('[Supabase] No credentials — running in offline/fallback mode.');
   }
 }
 
 export const supabaseClient: SupabaseClient | null = supabaseInstance;
 export const supabase: SupabaseClient | null = supabaseInstance;
 
-/**
- * Helper to sync token upserts to Supabase table `tokens` asynchronously
- */
+// ---------------------------------------------------------------------------
+// syncTokenToSupabase
+// Tries UPDATE first (triggers UPDATE RLS policy), falls back to INSERT/upsert
+// for new rows. Fire-and-forget — callers should not await critical UI paths on
+// this; optimistic state is applied immediately.
+// ---------------------------------------------------------------------------
 export const syncTokenToSupabase = async (token: Partial<Token>): Promise<boolean> => {
   if (!supabaseClient || !token.token_id) return false;
   try {
@@ -59,16 +62,25 @@ export const syncTokenToSupabase = async (token: Partial<Token>): Promise<boolea
       token_number: token.token_number,
       queue_position: token.queue_position,
       status: token.status,
-      quality_check_result: token.quality_check_result ? (typeof token.quality_check_result === 'string' ? token.quality_check_result : JSON.stringify(token.quality_check_result)) : null,
+      quality_check_result: token.quality_check_result
+        ? (typeof token.quality_check_result === 'string'
+            ? token.quality_check_result
+            : JSON.stringify(token.quality_check_result))
+        : null,
       payment_amount: token.payment_amount,
       payment_reference: token.payment_reference || null,
       payment_confirmed_at: token.payment_confirmed_at || null,
-      status_history: token.status_history ? (typeof token.status_history === 'string' ? token.status_history : JSON.stringify(token.status_history)) : null,
+      payment_method: token.payment_method || null,
+      status_history: token.status_history
+        ? (typeof token.status_history === 'string'
+            ? token.status_history
+            : JSON.stringify(token.status_history))
+        : null,
       created_at: token.created_at,
-      updated_at: token.updated_at
+      updated_at: token.updated_at,
     };
 
-    // 1. Try direct UPDATE first to strictly trigger UPDATE policy (avoids Postgres UPSERT INSERT policy conflict)
+    // Try UPDATE first (existing rows — triggers UPDATE RLS policy)
     const { data: updatedData, error: updateError } = await supabaseClient
       .from('tokens')
       .update(payload)
@@ -76,28 +88,61 @@ export const syncTokenToSupabase = async (token: Partial<Token>): Promise<boolea
       .select('token_id');
 
     if (!updateError && updatedData && updatedData.length > 0) {
-      if (import.meta.env?.DEV) {
-        console.log(`[Supabase Update Success] Token ${token.token_number} (${token.status}) updated in cloud.`);
-      }
       return true;
     }
 
-    // 2. If row didn't exist yet (new lot creation or initial seed), perform UPSERT/INSERT
+    // Row doesn't exist yet — INSERT (triggers INSERT RLS policy)
     const { error: insertError } = await supabaseClient
       .from('tokens')
       .upsert(payload, { onConflict: 'token_id' });
 
     if (insertError) {
-      console.error('[Supabase Sync Error]', insertError.message, insertError.details, insertError.hint);
-      return false;
-    } else {
-      if (import.meta.env?.DEV) {
-        console.log(`[Supabase Sync Success] Token ${token.token_number} (${token.status}) synced to cloud.`);
+      if (import.meta.env.DEV) {
+        console.error('[Supabase Sync Error]', insertError.message);
       }
-      return true;
+      return false;
     }
+    return true;
   } catch (err) {
-    console.error('[Supabase Sync Exception]', err);
+    if (import.meta.env.DEV) {
+      console.error('[Supabase Sync Exception]', err);
+    }
+    return false;
+  }
+};
+
+// ---------------------------------------------------------------------------
+// syncFarmerToSupabase
+// Upserts a farmer record. Used on registration so the account survives a
+// hard refresh on any device (not only the registering browser).
+// ---------------------------------------------------------------------------
+export const syncFarmerToSupabase = async (farmer: Farmer): Promise<boolean> => {
+  if (!supabaseClient || !farmer.farmer_id) return false;
+  try {
+    const { error } = await supabaseClient
+      .from('farmers')
+      .upsert(
+        {
+          farmer_id: farmer.farmer_id,
+          name: farmer.name,
+          phone: farmer.phone,
+          village: farmer.village,
+          district: farmer.district || 'Indore',
+          aadhaar_last4: farmer.aadhaar_last4 || null,
+          bank_account_last4: farmer.bank_account_last4 || null,
+          is_aadhaar_verified: farmer.is_aadhaar_verified ?? false,
+          created_at: farmer.created_at,
+        },
+        { onConflict: 'farmer_id' }
+      );
+    if (error && import.meta.env.DEV) {
+      console.warn('[Supabase] Farmer upsert failed:', error.message);
+    }
+    return !error;
+  } catch (err) {
+    if (import.meta.env.DEV) {
+      console.warn('[Supabase] Farmer upsert exception:', err);
+    }
     return false;
   }
 };

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useApp } from '../../context/AppContext';
 import { MinistryOverview, CenterAnalytics } from '../../types';
 import { getFallbackOverview } from '../../utils/clientFallback';
@@ -22,26 +22,19 @@ export const AdminAnalytics: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [selectedCenterFilter, setSelectedCenterFilter] = useState('ALL');
 
-  const fetchOverview = async () => {
+  // H-4: Compute directly from live allTokens — no API fetch.
+  // In production (Cloudflare Workers static site) there is no /api/analytics/overview
+  // endpoint. The Express server is dev-only (H-1). getFallbackOverview is not a
+  // fallback — it is the real computation.
+  const fetchOverview = useCallback(() => {
     setLoading(true);
-    try {
-      const res = await fetch('/api/analytics/overview');
-      if (res.ok) {
-        const data = await res.json();
-        setOverview(data);
-        setLoading(false);
-        return;
-      }
-    } catch (err) {
-      console.warn('API overview fetch failed, using telemetry fallback data:', err);
-    }
     setOverview(getFallbackOverview(allTokens, centers));
     setLoading(false);
-  };
+  }, [allTokens, centers]);
 
   useEffect(() => {
     fetchOverview();
-  }, [allTokens, centers]);
+  }, [fetchOverview]);
 
   if (loading || !overview) {
     return (
@@ -109,7 +102,7 @@ export const AdminAnalytics: React.FC = () => {
           </div>
           <div className="flex items-center gap-1 text-[11px] text-emerald-700 font-bold">
             <TrendingUp className="w-3.5 h-3.5" />
-            <span>+18.4% vs yesterday</span>
+            <span>{overview.total_farmers_served_today} lots processed today</span>
           </div>
         </div>
 
@@ -123,7 +116,9 @@ export const AdminAnalytics: React.FC = () => {
           </div>
           <div className="flex items-center gap-1 text-[11px] text-emerald-700 font-bold">
             <CheckCircle2 className="w-3.5 h-3.5" />
-            <span>100% DBT Success Rate</span>
+            <span>
+              {allTokens.filter(t => t.status === 'Payment Sent').length} of {allTokens.filter(t => ['Procured', 'Payment Sent'].includes(t.status)).length || 0} DBT Disbursed
+            </span>
           </div>
         </div>
 
@@ -215,24 +210,40 @@ export const AdminAnalytics: React.FC = () => {
         <div className="lg:col-span-4 bg-white rounded-2xl border border-stone-200 shadow-xs p-4 sm:p-5 space-y-4">
           <h3 className="font-bold text-stone-900 text-sm flex items-center gap-2">
             <Clock className="w-4 h-4 text-emerald-700" />
-            <span>Today's Arrival Load by Hour</span>
+            <span>
+              {selectedCenterFilter === 'ALL' ? "Today's Arrival Load by Hour (All Centers)" : "Today's Arrival Load by Hour"}
+            </span>
           </h3>
 
           <div className="space-y-2 pt-2">
-            {(overview.center_performance[0]?.hourly_arrivals || []).map(h => (
-              <div key={h.hour} className="space-y-1">
-                <div className="flex justify-between text-xs text-stone-600 font-mono">
-                  <span>{h.hour}</span>
-                  <span className="font-bold text-stone-900">{h.count} lots</span>
-                </div>
-                <div className="w-full h-2 rounded-full bg-stone-100 overflow-hidden">
-                  <div
-                    className="h-full bg-emerald-700 rounded-full"
-                    style={{ width: `${(h.count / 15) * 100}%` }}
-                  />
-                </div>
-              </div>
-            ))}
+            {(() => {
+              const standardHours = ['07:00 AM', '08:00 AM', '09:00 AM', '10:00 AM', '11:00 AM', '12:00 PM', '02:00 PM', '04:00 PM'];
+              const hourCounts: Record<string, number> = {};
+              standardHours.forEach(h => { hourCounts[h] = 0; });
+              centersToDisplay.forEach(c => {
+                (c.hourly_arrivals || []).forEach(ha => {
+                  hourCounts[ha.hour] = (hourCounts[ha.hour] || 0) + ha.count;
+                });
+              });
+              const maxCount = Math.max(1, ...Object.values(hourCounts));
+              return standardHours.map(hour => {
+                const count = hourCounts[hour] || 0;
+                return (
+                  <div key={hour} className="space-y-1">
+                    <div className="flex justify-between text-xs text-stone-600 font-mono">
+                      <span>{hour}</span>
+                      <span className="font-bold text-stone-900">{count} lots</span>
+                    </div>
+                    <div className="w-full h-2 rounded-full bg-stone-100 overflow-hidden">
+                      <div
+                        className="h-full bg-emerald-700 rounded-full transition-all"
+                        style={{ width: `${Math.min(100, Math.round((count / maxCount) * 100))}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              });
+            })()}
           </div>
 
           <div className="p-3 bg-stone-50 rounded-xl border border-stone-200 text-xs text-stone-600">
