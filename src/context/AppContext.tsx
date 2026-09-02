@@ -4,9 +4,16 @@ import { translations, MSP_DATA } from '../utils/translations';
 import { 
   FALLBACK_CENTERS, 
   FALLBACK_TOKENS, 
-  FALLBACK_SMS_LOGS 
+  FALLBACK_SMS_LOGS,
+  FALLBACK_FARMERS
 } from '../utils/clientFallback';
-import { supabaseClient, syncTokenToSupabase, syncFarmerToSupabase } from '../utils/supabaseClient';
+import { 
+  supabaseClient, 
+  syncTokenToSupabase, 
+  syncFarmerToSupabase,
+  fetchFarmerFromSupabase,
+  fetchAllFarmersFromSupabase
+} from '../utils/supabaseClient';
 import { CreateTokenSchema, AdvanceStatusSchema } from '../utils/validation';
 
 interface AppContextType {
@@ -25,10 +32,12 @@ interface AppContextType {
   allTokens: Token[];
   refreshCenterQueue: () => Promise<void>;
   
-  // Farmer session
+  // Farmer session & registry
   currentFarmer: Farmer | null;
   setCurrentFarmer: (farmer: Farmer | null) => void;
-  registerFarmer: (farmer: Farmer) => Promise<void>;
+  allFarmers: Farmer[];
+  findFarmer: (query: { phone?: string; aadhaar_last4?: string }) => Promise<Farmer | null>;
+  registerFarmer: (farmer: Partial<Farmer> & { name: string; village: string } | Farmer) => Promise<Farmer>;
   updateFarmerProfile: (updates: Partial<Farmer>) => Promise<Farmer>;
   activeToken: Token | null;
   setActiveToken: (token: Token | null) => void;
@@ -106,8 +115,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // (which remain in Supabase since anon has no DELETE) from flooding back in.
   const postResetFilterUntil = useRef<number>(0);
 
-  // Always start fresh sessions at Farmer Login Screen (null)
-  const [currentFarmer, setCurrentFarmer] = useState<Farmer | null>(null);
+  // Always restore session if stored, else start at Farmer Login Screen (null)
+  const [currentFarmer, setCurrentFarmer] = useState<Farmer | null>(() => {
+    try {
+      const saved = localStorage.getItem('mandi_current_farmer');
+      if (saved) {
+        const parsed = JSON.parse(saved) as Farmer;
+        if (parsed && (parsed.farmer_id || parsed.phone || parsed.aadhaar_last4)) {
+          return parsed;
+        }
+      }
+    } catch (e) {}
+    return null;
+  });
+
+  // Persistent Farmers Registry across sessions & devices
+  const [allFarmers, setAllFarmers] = useState<Farmer[]>(() => {
+    try {
+      const raw = localStorage.getItem('mandi_farmers_registry');
+      if (raw) {
+        const parsed = JSON.parse(raw) as unknown;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const phoneSet = new Set((parsed as Farmer[]).map(p => p.phone).filter(Boolean));
+          const aadhaarSet = new Set((parsed as Farmer[]).map(p => p.aadhaar_last4).filter(Boolean));
+          const merged: Farmer[] = [...(parsed as Farmer[])];
+          FALLBACK_FARMERS.forEach(d => {
+            if (!phoneSet.has(d.phone) && (!d.aadhaar_last4 || !aadhaarSet.has(d.aadhaar_last4))) {
+              merged.push(d);
+            }
+          });
+          return merged;
+        }
+      }
+    } catch (e) {}
+    return FALLBACK_FARMERS;
+  });
 
   // Persistent Tokens State across sessions & devices (M-7: capped history)
   const [allTokens, setAllTokens] = useState<Token[]>(() => {
@@ -129,7 +171,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     allTokens.find(t => t.token_id === 't-104') || allTokens[0]
   );
   const [farmerTokens, setFarmerTokens] = useState<Token[]>(
-    allTokens.filter(t => t.farmer_phone === '9876543210')
+    allTokens.filter(t => t.farmer_phone === (currentFarmer?.phone || '9876543210'))
   );
   const [smsLogs, setSmsLogs] = useState<SMSLog[]>(() => {
     try {
@@ -170,6 +212,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localStorage.setItem('mandi_sms_logs', JSON.stringify(smsLogs.slice(0, 50)));
     } catch (e) {}
   }, [smsLogs]);
+
+  // Initial load of registered farmers from Supabase PostgreSQL
+  useEffect(() => {
+    const loadRemoteFarmers = async () => {
+      try {
+        const remote = await fetchAllFarmersFromSupabase();
+        if (remote && remote.length > 0) {
+          setAllFarmers(prev => {
+            const remoteIds = new Set(remote.map(r => r.farmer_id));
+            const remotePhones = new Set(remote.map(r => r.phone).filter(Boolean));
+            const remoteAadhaar = new Set(remote.map(r => r.aadhaar_last4).filter(Boolean));
+
+            const localOnly = prev.filter(
+              p =>
+                !remoteIds.has(p.farmer_id) &&
+                (!p.phone || !remotePhones.has(p.phone)) &&
+                (!p.aadhaar_last4 || !remoteAadhaar.has(p.aadhaar_last4))
+            );
+            const combined = [...remote, ...localOnly];
+            try {
+              localStorage.setItem('mandi_farmers_registry', JSON.stringify(combined));
+            } catch (e) {}
+            return combined;
+          });
+        }
+      } catch (err) {
+        if (import.meta.env.DEV) console.warn('[AppContext] Could not sync farmers from Supabase:', err);
+      }
+    };
+    loadRemoteFarmers();
+  }, []);
 
   // Keep derived states in sync automatically
   useEffect(() => {
@@ -479,18 +552,104 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [selectedCenterId, currentFarmer?.phone, activeToken?.token_id, refreshCenterQueue, refreshFarmerTokens, refreshSmsLogs]);
 
-  // Group 1.5: Register farmer — persists to both localStorage registry and Supabase
-  const registerFarmer = async (farmer: Farmer): Promise<void> => {
-    setCurrentFarmer(farmer);
-    // Persist to localStorage farmers registry (same-device persistence)
+  // Unified Farmer Lookup across Supabase PostgreSQL, Local Registry, and Fallback Accounts
+  const findFarmer = useCallback(
+    async (query: { phone?: string; aadhaar_last4?: string }): Promise<Farmer | null> => {
+      if (!query.phone && !query.aadhaar_last4) return null;
+
+      // 1. Check Supabase first if online
+      try {
+        const remote = await fetchFarmerFromSupabase(query);
+        if (remote) {
+          setAllFarmers(prev => {
+            const updated = [
+              remote,
+              ...prev.filter(f => f.farmer_id !== remote.farmer_id && (remote.phone ? f.phone !== remote.phone : true))
+            ];
+            try {
+              localStorage.setItem('mandi_farmers_registry', JSON.stringify(updated));
+            } catch (e) {}
+            return updated;
+          });
+          return remote;
+        }
+      } catch (err) {
+        if (import.meta.env.DEV) console.warn('[findFarmer] Supabase lookup error:', err);
+      }
+
+      // 2. Check local allFarmers registry
+      const match = allFarmers.find(f => {
+        if (query.aadhaar_last4 && f.aadhaar_last4 === query.aadhaar_last4) return true;
+        if (query.phone && f.phone === query.phone) return true;
+        return false;
+      });
+      if (match) return match;
+
+      // 3. Fallback accounts
+      const fallbackMatch = FALLBACK_FARMERS.find(f => {
+        if (query.aadhaar_last4 && f.aadhaar_last4 === query.aadhaar_last4) return true;
+        if (query.phone && f.phone === query.phone) return true;
+        return false;
+      });
+      return fallbackMatch || null;
+    },
+    [allFarmers]
+  );
+
+  // Unified Register Farmer Action — persists to BOTH localStorage registry & Supabase
+  const registerFarmer = async (
+    farmerData: Partial<Farmer> & { name: string; village: string } | Farmer
+  ): Promise<Farmer> => {
+    const phone = farmerData.phone || '';
+    const aadhaar_last4 = farmerData.aadhaar_last4 || undefined;
+    const farmerId =
+      farmerData.farmer_id ||
+      (phone ? `f-${phone}` : (aadhaar_last4 ? `f-a-${aadhaar_last4}` : `f-${Date.now()}`));
+
+    const fullFarmer: Farmer = {
+      farmer_id: farmerId,
+      name: farmerData.name.trim() || 'Kisan Bhaai',
+      phone: phone,
+      village: farmerData.village.trim() || 'Rau Village',
+      district: farmerData.district || 'Indore',
+      aadhaar_last4: aadhaar_last4,
+      bank_account_last4: farmerData.bank_account_last4 || undefined,
+      is_aadhaar_verified: Boolean(
+        farmerData.is_aadhaar_verified || (aadhaar_last4 && aadhaar_last4.length === 4)
+      ),
+      created_at: farmerData.created_at || new Date().toISOString()
+    };
+
+    // Set current active farmer in state
+    setCurrentFarmer(fullFarmer);
+
+    // Update local registry
+    setAllFarmers(prev => {
+      const filtered = prev.filter(
+        f => f.farmer_id !== fullFarmer.farmer_id && (phone ? f.phone !== phone : true)
+      );
+      const updated = [fullFarmer, ...filtered];
+      try {
+        localStorage.setItem('mandi_farmers_registry', JSON.stringify(updated));
+        localStorage.setItem('mandi_current_farmer', JSON.stringify(fullFarmer));
+      } catch (e) {}
+      return updated;
+    });
+
+    // Persist to Supabase (cross-device persistence)
     try {
-      const raw = localStorage.getItem('mandi_farmers_registry');
-      const existing: Farmer[] = raw ? (JSON.parse(raw) as Farmer[]) : [];
-      const updated = [farmer, ...existing.filter(f => f.phone !== farmer.phone)];
-      localStorage.setItem('mandi_farmers_registry', JSON.stringify(updated));
-    } catch (e) {}
-    // Persist to Supabase (cross-device persistence, fire-and-forget)
-    syncFarmerToSupabase(farmer);
+      await syncFarmerToSupabase(fullFarmer);
+    } catch (e) {
+      if (import.meta.env.DEV) {
+        console.warn('[registerFarmer] Supabase sync error:', e);
+      }
+    }
+
+    if (fullFarmer.phone) {
+      await refreshFarmerTokens(fullFarmer.phone);
+    }
+
+    return fullFarmer;
   };
 
   // Token Creation Action (H-2: Monotonic sequence with Supabase MAX; M-5: crypto.randomUUID; H-3: pendingSync)
@@ -777,6 +936,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localStorage.removeItem('mandi_all_tokens');
       localStorage.removeItem('mandi_sms_logs');
       localStorage.removeItem('mandi_current_farmer');
+      localStorage.setItem('mandi_farmers_registry', JSON.stringify(FALLBACK_FARMERS));
     } catch (e) {}
 
     // Activate post-reset filter for 8 seconds
@@ -792,6 +952,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     setAllTokens(FALLBACK_TOKENS);
+    setAllFarmers(FALLBACK_FARMERS);
     setSmsLogs(FALLBACK_SMS_LOGS);
     setCurrentFarmer(null);
   };
@@ -843,6 +1004,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         refreshCenterQueue,
         currentFarmer,
         setCurrentFarmer,
+        allFarmers,
+        findFarmer,
         registerFarmer,
         updateFarmerProfile,
         activeToken,

@@ -1,5 +1,74 @@
 import { Center, Farmer, Token, SMSLog, MinistryOverview } from '../types';
 
+export const FALLBACK_FARMERS: Farmer[] = [
+  {
+    farmer_id: 'f-ramesh',
+    name: 'Ramesh Kumar',
+    phone: '9876543210',
+    village: 'Rau Village',
+    district: 'Indore',
+    aadhaar_last4: '7821',
+    bank_account_last4: '4509',
+    is_aadhaar_verified: true,
+    created_at: new Date(Date.now() - 86400000 * 2).toISOString()
+  },
+  {
+    farmer_id: 'f-suresh',
+    name: 'Suresh Patel',
+    phone: '9826012345',
+    village: 'Rangwasa',
+    district: 'Indore',
+    aadhaar_last4: '9912',
+    bank_account_last4: '6612',
+    is_aadhaar_verified: true,
+    created_at: new Date(Date.now() - 86400000 * 3).toISOString()
+  },
+  {
+    farmer_id: 'f-rajesh',
+    name: 'Rajesh Verma',
+    phone: '9425098765',
+    village: 'Sanwer',
+    district: 'Indore',
+    aadhaar_last4: '3487',
+    bank_account_last4: '1190',
+    is_aadhaar_verified: true,
+    created_at: new Date(Date.now() - 86400000 * 4).toISOString()
+  },
+  {
+    farmer_id: 'f-sunita',
+    name: 'Sunita Bai',
+    phone: '9893011223',
+    village: 'Depalpur',
+    district: 'Indore',
+    aadhaar_last4: '6541',
+    bank_account_last4: '8823',
+    is_aadhaar_verified: true,
+    created_at: new Date(Date.now() - 86400000 * 5).toISOString()
+  },
+  {
+    farmer_id: 'f-mohan',
+    name: 'Mohan Lal Yadav',
+    phone: '9755566778',
+    village: 'Pithampur',
+    district: 'Dhar',
+    aadhaar_last4: '1234',
+    bank_account_last4: '5432',
+    is_aadhaar_verified: true,
+    created_at: new Date(Date.now() - 86400000 * 6).toISOString()
+  },
+  {
+    farmer_id: 'f-vikram',
+    name: 'Vikram Singh',
+    phone: '9111223344',
+    village: 'Betma',
+    district: 'Indore',
+    aadhaar_last4: '8765',
+    bank_account_last4: '9081',
+    is_aadhaar_verified: true,
+    created_at: new Date(Date.now() - 86400000 * 7).toISOString()
+  }
+];
+
 export const FALLBACK_CENTERS: Center[] = [
   {
     center_id: 'c-rau',

@@ -1,18 +1,39 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { Token, Farmer } from '../types';
 
+const getEnv = (key: string): string => {
+  try {
+    if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env[key]) {
+      return import.meta.env[key];
+    }
+  } catch (_e) {}
+  try {
+    if (typeof process !== 'undefined' && process.env && process.env[key]) {
+      return process.env[key] as string;
+    }
+  } catch (_e) {}
+  return '';
+};
+
+const isDev = (): boolean => {
+  try {
+    if (typeof import.meta !== 'undefined' && import.meta.env) {
+      return Boolean(import.meta.env.DEV);
+    }
+  } catch (_e) {}
+  try {
+    if (typeof process !== 'undefined' && process.env) {
+      return process.env.NODE_ENV !== 'production';
+    }
+  } catch (_e) {}
+  return false;
+};
+
 // C-1: No hardcoded credentials. Credentials must be supplied via environment
 // variables (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY). If they are absent
 // the app degrades gracefully into offline/localStorage-only mode.
-const SUPABASE_URL: string =
-  import.meta.env.VITE_SUPABASE_URL ||
-  import.meta.env.SUPABASE_URL ||
-  '';
-
-const SUPABASE_ANON_KEY: string =
-  import.meta.env.VITE_SUPABASE_ANON_KEY ||
-  import.meta.env.SUPABASE_ANON_KEY ||
-  '';
+const SUPABASE_URL: string = getEnv('VITE_SUPABASE_URL') || getEnv('SUPABASE_URL');
+const SUPABASE_ANON_KEY: string = getEnv('VITE_SUPABASE_ANON_KEY') || getEnv('SUPABASE_ANON_KEY');
 
 export const isSupabaseConfigured = (): boolean =>
   Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
@@ -23,14 +44,14 @@ if (SUPABASE_URL && SUPABASE_ANON_KEY) {
   try {
     supabaseInstance = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
     // L-2: connection log is dev-only and contains no user data
-    if (import.meta.env.DEV) {
+    if (isDev()) {
       console.log('[Supabase] Client initialised (URL prefix:', SUPABASE_URL.slice(0, 30), ')');
     }
   } catch (err) {
     console.warn('[Supabase] Failed to initialise client:', err);
   }
 } else {
-  if (import.meta.env.DEV) {
+  if (isDev()) {
     console.log('[Supabase] No credentials — running in offline/fallback mode.');
   }
 }
@@ -97,14 +118,14 @@ export const syncTokenToSupabase = async (token: Partial<Token>): Promise<boolea
       .upsert(payload, { onConflict: 'token_id' });
 
     if (insertError) {
-      if (import.meta.env.DEV) {
+      if (isDev()) {
         console.error('[Supabase Sync Error]', insertError.message);
       }
       return false;
     }
     return true;
   } catch (err) {
-    if (import.meta.env.DEV) {
+    if (isDev()) {
       console.error('[Supabase Sync Exception]', err);
     }
     return false;
@@ -131,18 +152,94 @@ export const syncFarmerToSupabase = async (farmer: Farmer): Promise<boolean> => 
           aadhaar_last4: farmer.aadhaar_last4 || null,
           bank_account_last4: farmer.bank_account_last4 || null,
           is_aadhaar_verified: farmer.is_aadhaar_verified ?? false,
-          created_at: farmer.created_at,
+          created_at: farmer.created_at || new Date().toISOString(),
         },
         { onConflict: 'farmer_id' }
       );
-    if (error && import.meta.env.DEV) {
+    if (error && isDev()) {
       console.warn('[Supabase] Farmer upsert failed:', error.message);
     }
     return !error;
   } catch (err) {
-    if (import.meta.env.DEV) {
+    if (isDev()) {
       console.warn('[Supabase] Farmer upsert exception:', err);
     }
     return false;
   }
 };
+
+// ---------------------------------------------------------------------------
+// fetchFarmerFromSupabase
+// Queries Supabase 'farmers' table by phone or aadhaar_last4
+// ---------------------------------------------------------------------------
+export const fetchFarmerFromSupabase = async (query: {
+  phone?: string;
+  aadhaar_last4?: string;
+}): Promise<Farmer | null> => {
+  if (!supabaseClient || (!query.phone && !query.aadhaar_last4)) return null;
+  try {
+    let q = supabaseClient.from('farmers').select('*');
+    if (query.aadhaar_last4) {
+      q = q.eq('aadhaar_last4', query.aadhaar_last4);
+    } else if (query.phone) {
+      q = q.eq('phone', query.phone);
+    }
+
+    const { data, error } = await q.limit(1);
+    if (!error && Array.isArray(data) && data.length > 0) {
+      const row = data[0] as Farmer;
+      return {
+        farmer_id: row.farmer_id,
+        name: row.name,
+        phone: row.phone,
+        village: row.village,
+        district: row.district || 'Indore',
+        aadhaar_last4: row.aadhaar_last4 || undefined,
+        bank_account_last4: row.bank_account_last4 || undefined,
+        is_aadhaar_verified: Boolean(row.is_aadhaar_verified),
+        created_at: row.created_at,
+      };
+    }
+    return null;
+  } catch (err) {
+    if (isDev()) {
+      console.warn('[Supabase] Farmer fetch exception:', err);
+    }
+    return null;
+  }
+};
+
+// ---------------------------------------------------------------------------
+// fetchAllFarmersFromSupabase
+// Retrieves all registered farmers from Supabase 'farmers' table
+// ---------------------------------------------------------------------------
+export const fetchAllFarmersFromSupabase = async (): Promise<Farmer[]> => {
+  if (!supabaseClient) return [];
+  try {
+    const { data, error } = await supabaseClient
+      .from('farmers')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (!error && Array.isArray(data)) {
+      return data.map(row => ({
+        farmer_id: row.farmer_id,
+        name: row.name,
+        phone: row.phone,
+        village: row.village,
+        district: row.district || 'Indore',
+        aadhaar_last4: row.aadhaar_last4 || undefined,
+        bank_account_last4: row.bank_account_last4 || undefined,
+        is_aadhaar_verified: Boolean(row.is_aadhaar_verified),
+        created_at: row.created_at,
+      }));
+    }
+    return [];
+  } catch (err) {
+    if (isDev()) {
+      console.warn('[Supabase] All farmers fetch exception:', err);
+    }
+    return [];
+  }
+};
+

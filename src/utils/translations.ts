@@ -15,7 +15,20 @@ export const translations = {
 
     // Farmer Login / Register
     farmerLoginTitle: 'Farmer Login / Registration',
-    farmerLoginSub: 'Enter your 10-digit mobile number to access your mandi tokens and live queue status.',
+    farmerLoginSub: 'Enter your Aadhaar or mobile number to access your mandi tokens and live queue status.',
+    aadhaarLoginTab: 'Aadhaar Login / e-KYC',
+    mobileLoginTab: 'Mobile Number Login',
+    aadhaarNumber: '12-Digit Aadhaar Number',
+    aadhaarPlaceholder: '1234 5678 9012',
+    aadhaarHelper: 'SIH Prototype — Simulated Aadhaar Verification',
+    aadhaarSub: 'Simulate UIDAI Aadhaar OTP verification to authenticate MSP procurement and live queue tokens.',
+    aadhaarSendOtp: 'Send Aadhaar OTP',
+    enterAadhaarOtp: 'Enter 6-Digit Aadhaar OTP',
+    simulatedOtpCardTitle: 'Simulated UIDAI e-KYC Sandbox',
+    simulatedOtpNote: 'Prototype simulation • No real UIDAI API called',
+    useMobileInstead: 'Login with mobile number instead',
+    useAadhaarInstead: 'Login with Aadhaar instead',
+    aadhaarVerifiedBadge: 'Aadhaar Verified ✓',
     phoneNumber: 'Mobile Number',
     phonePlaceholder: 'e.g. 9876543210',
     enterOtp: 'Enter 4-Digit OTP',
@@ -29,6 +42,8 @@ export const translations = {
     name: 'Full Name',
     village: 'Village / Gram Panchayat',
     villagePlaceholder: 'e.g. Rau, Sanwer, Depalpur',
+    district: 'District',
+    districtPlaceholder: 'e.g. Indore, Dhar, Ujjain',
     registerBtn: 'Register Farmer Profile',
 
     // Farmer Lot Registration
@@ -141,7 +156,20 @@ export const translations = {
 
     // Farmer Login / Register
     farmerLoginTitle: 'किसान लॉगिन / नया पंजीकरण',
-    farmerLoginSub: 'अपने डिजिटल टोकन और लाइव कतार स्थिति देखने के लिए अपना 10 अंकों का मोबाइल नंबर दर्ज करें।',
+    farmerLoginSub: 'अपने डिजिटल टोकन और लाइव कतार स्थिति देखने के लिए अपना आधार या मोबाइल नंबर दर्ज करें।',
+    aadhaarLoginTab: 'आधार लॉगिन / ई-केवाईसी',
+    mobileLoginTab: 'मोबाइल नंबर लॉगिन',
+    aadhaarNumber: '12-अंकों का आधार कार्ड नंबर',
+    aadhaarPlaceholder: '1234 5678 9012',
+    aadhaarHelper: 'एसआईएच प्रोटोटाइप — सिमुलेटेड आधार सत्यापन',
+    aadhaarSub: 'एमएसपी उपार्जन और लाइव कतार टोकन के लिए सिमुलेटेड यूआईडीएआई आधार ओटीपी प्रमाणीकरण।',
+    aadhaarSendOtp: 'आधार ओटीपी भेजें',
+    enterAadhaarOtp: '6-अंकों का आधार ओटीपी दर्ज करें',
+    simulatedOtpCardTitle: 'सिमुलेटेड यूआईडीएआई ई-केवाईसी सैंडबॉक्स',
+    simulatedOtpNote: 'प्रोटोटाइप सिमुलेशन • कोई वास्तविक यूआईडीएआई कॉल नहीं',
+    useMobileInstead: 'इसके बजाय मोबाइल नंबर से लॉगिन करें',
+    useAadhaarInstead: 'इसके बजाय आधार नंबर से लॉगिन करें',
+    aadhaarVerifiedBadge: 'आधार सत्यापित ✓',
     phoneNumber: 'मोबाइल नंबर',
     phonePlaceholder: 'उदा. 9876543210',
     enterOtp: '4-अंकों का ओटीपी दर्ज करें',
@@ -155,6 +183,8 @@ export const translations = {
     name: 'किसान का पूरा नाम',
     village: 'गांव / ग्राम पंचायत',
     villagePlaceholder: 'उदा. राऊ, सांवेर, देपालपुर',
+    district: 'जिला',
+    districtPlaceholder: 'उदा. इंदौर, धार, उज्जैन',
     registerBtn: 'किसान प्रोफाइल बनाएं',
 
     // Farmer Lot Registration
